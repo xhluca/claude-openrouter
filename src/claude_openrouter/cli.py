@@ -29,6 +29,7 @@ from .settings import (
     reset_integration,
 )
 from .uninstall import remove_installed_package
+from .update import update_installed_package
 
 MINIMUM_CLAUDE_VERSION = (2, 1, 242)
 
@@ -75,6 +76,11 @@ def parser() -> argparse.ArgumentParser:
 
     commands.add_parser("reset", help="restore Claude Code's original settings and remove data")
     commands.add_parser("uninstall", help="reset the integration and uninstall this tool")
+    commands.add_parser(
+        "update",
+        aliases=["upgrade"],
+        help="install the latest Claude OpenRouter release",
+    )
     return root
 
 
@@ -315,6 +321,9 @@ def main(argv: list[str] | None = None) -> int:
             return command_reset()
         if args.command == "uninstall":
             return command_uninstall()
+        if args.command in {"update", "upgrade"}:
+            update_installed_package(__version__)
+            return 0
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

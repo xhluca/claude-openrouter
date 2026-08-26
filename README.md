@@ -45,6 +45,15 @@ uvx claude-openrouter setup
 `claude-openrouter`; `clor` is the shorthand. Claude Code 2.1.242 or newer is
 required for the multi-model picker.
 
+Upgrade the installation in place at any time:
+
+```bash
+clor update
+```
+
+The updater uses the manager that owns the current installation and reports
+the installed version before and after. `clor upgrade` is an alias.
+
 ## Quick start
 
 Refresh the local catalog:
@@ -98,6 +107,7 @@ OpenRouter key stored by this tool.
 | `clor setup` | Run the install-time key and model setup again |
 | `clor select [MODEL]` | Replace `/model` favorites exactly |
 | `clor config` | Replace and validate the stored OpenRouter key |
+| `clor update` | Install the latest release and report the version change |
 | `clor reset` | Restore the original Claude settings and delete tool data |
 | `clor uninstall` | Reset the integration and remove a curl/uv installation |
 

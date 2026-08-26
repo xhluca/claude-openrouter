@@ -12,6 +12,19 @@ def test_fetch_alias_parses() -> None:
     assert cli.parser().parse_args(["fetch"]).command == "fetch"
 
 
+def test_update_and_upgrade_parse() -> None:
+    assert cli.parser().parse_args(["update"]).command == "update"
+    assert cli.parser().parse_args(["upgrade"]).command == "upgrade"
+
+
+def test_update_dispatches_with_current_version(monkeypatch) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(cli, "update_installed_package", seen.append)
+
+    assert cli.main(["update"]) == 0
+    assert seen == [cli.__version__]
+
+
 def test_masked_input_falls_back_for_non_terminal(monkeypatch) -> None:
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: f"{prompt}secret")
