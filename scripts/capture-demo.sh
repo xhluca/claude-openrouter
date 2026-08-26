@@ -11,7 +11,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-for command_name in asciinema claude expect uv; do
+for command_name in asciinema claude expect tmux uv; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "$command_name is required to capture the demo" >&2
     exit 2
@@ -30,6 +30,7 @@ export XDG_CACHE_HOME="$demo_root/.cache"
 export XDG_STATE_HOME="$demo_root/.local/state"
 export XDG_DATA_HOME="$demo_root/.local/share"
 export CLAUDE_CONFIG_DIR="$demo_root/.claude"
+export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT="1"
 export CLOR_DEMO_INSTALL_URL="${CLOR_DEMO_INSTALL_URL:-https://xhluca.github.io/claude-openrouter/install.sh}"
 unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
 
@@ -79,16 +80,12 @@ if grep -Eq 'sk-or-[A-Za-z0-9_-]+' "$asset_dir/demo.cast"; then
   exit 1
 fi
 
-for required_text in \
+python3 "$script_dir/verify-demo-cast.py" \
+  "$asset_dir/demo.cast" \
   'curl -LsSf https://xhluca.github.io/claude-openrouter/install.sh' \
   'clor search glm-5.3-flash' \
   'clor select z-ai/glm-5.3-flash' \
   'z-ai/glm-5.3-flash' \
-  'Hello from GLM-5.3-Flash.'; do
-  grep -Fq "$required_text" "$asset_dir/demo.cast" || {
-    echo "demo cast is missing: $required_text" >&2
-    exit 1
-  }
-done
+  'Hello from GLM-5.3-Flash.'
 
 echo "Captured $asset_dir/demo.cast"
