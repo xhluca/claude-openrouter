@@ -43,7 +43,16 @@ def test_readme_keeps_acknowledgements_at_bottom() -> None:
     assert "Claude Code Router (CCR)" in readme
 
 
-def test_pages_source_keeps_short_installer_and_launch_command() -> None:
+def test_pages_source_keeps_short_installer_and_plain_claude_command() -> None:
     site = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
     assert "https://xhluca.github.io/claude-openrouter/install.sh" in site
-    assert "clor claude" in site
+    assert "plain <code>claude</code>" in site
+    assert "<code>clor claude</code>" not in site
+
+
+def test_demo_uses_plain_claude_and_current_settings_path() -> None:
+    cast = (ROOT / "docs" / "assets" / "demo.cast").read_text(encoding="utf-8")
+    assert "clor claude" not in cast
+    assert "claude-settings.json" not in cast
+    assert "~/.claude/settings.json" in cast
+    assert f"claude-openrouter {__version__}" in cast

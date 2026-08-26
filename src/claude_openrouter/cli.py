@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .launcher import launch_claude
+from .launcher import has_native_login, launch_claude
 from .models import exact_models, print_models, search_models
 from .openrouter import (
     load_catalog,
@@ -29,6 +29,7 @@ from .settings import (
     assert_private_files,
     configure_claude,
     favorite_ids,
+    refresh_claude_credential,
     reset_integration,
 )
 from .uninstall import remove_installed_package
@@ -100,7 +101,7 @@ def parser() -> argparse.ArgumentParser:
     )
     claude = commands.add_parser(
         "claude",
-        help="launch Claude Code with OpenRouter favorites and native connectors",
+        help="compatibility alias for the ordinary claude command",
     )
     claude.add_argument(
         "claude_args",
@@ -257,7 +258,7 @@ def command_setup(*, key_stdin: bool, no_validate: bool, ids: list[str] | None) 
     models = refresh_catalog(key)
     selected = _choose_or_validate(models, ids)
     write_credential(key)
-    settings = configure_claude(selected)
+    settings = configure_claude(selected, native_login=has_native_login())
     assert_private_files()
     _warn_claude_compatibility()
     print(_styled("✓ Claude OpenRouter is ready", "1;32"))
@@ -270,14 +271,14 @@ def command_setup(*, key_stdin: bool, no_validate: bool, ids: list[str] | None) 
         f"{_styled('Model index:', '1;36')} "
         f"{_styled(catalog_path(), '36')} {_styled(f'({len(models)} models)', '2')}"
     )
-    print(f"{_styled('OpenRouter launch settings:', '1;36')} {_styled(settings, '36')}")
+    print(f"{_styled('Claude Code settings:', '1;36')} {_styled(settings, '36')}")
     print()
     print(_styled("Favorites:", "1;35"))
     for model in selected:
         print(f"  {_styled('●', '1;32')} {_styled(model['id'], '1;36')}")
     print()
     print(
-        f"{_styled('Next:', '1;33')} run {_styled('clor claude', '1;32')}, then use "
+        f"{_styled('Next:', '1;33')} run {_styled('claude', '1;32')}, then use "
         f"{_styled('/model', '1;35')} to switch OpenRouter favorites."
     )
     return 0
@@ -297,7 +298,7 @@ def command_select(
         requested = models_option
     models = refresh_catalog()
     selected = _choose_or_validate(models, requested)
-    settings = configure_claude(selected)
+    settings = configure_claude(selected, native_login=has_native_login())
     assert_private_files()
     print(
         _styled(
@@ -316,6 +317,8 @@ def command_config(*, key_stdin: bool, no_validate: bool) -> int:
         validate_key(key)
     models = refresh_catalog(key)
     write_credential(key)
+    refresh_claude_credential(key)
+    assert_private_files()
     print(f"OpenRouter credential updated: {credential_path()} (mode 0600)")
     print(f"Model index refreshed: {len(models)} models")
     return 0
@@ -325,7 +328,7 @@ def command_claude(arguments: list[str]) -> int:
     ids = favorite_ids()
     if not ids:
         raise RuntimeError("no OpenRouter favorites are configured; run setup")
-    configure_claude(exact_models(load_catalog(), ids))
+    configure_claude(exact_models(load_catalog(), ids), native_login=has_native_login())
     assert_private_files()
     launch_claude(arguments)
     return 0

@@ -38,26 +38,26 @@
         </div>
 
         <figure class="demo">
-          <img src="assets/demo.gif?v=3" alt="Installing Claude OpenRouter, entering a masked API key, selecting GLM-5.3-Flash, and receiving a live Claude Code response">
+          <img src="assets/demo.gif?v=4" alt="Installing Claude OpenRouter, entering a masked API key, selecting GLM-5.3-Flash, and receiving a live Claude Code response">
           <figcaption>
             Real-time curl install · masked key · live GLM-5.3-Flash response ·
-            <a href="assets/demo.mp4?v=3">MP4</a> ·
-            <a href="assets/demo.cast?v=3">asciicast</a>
+            <a href="assets/demo.mp4?v=4">MP4</a> ·
+            <a href="assets/demo.cast?v=4">asciicast</a>
           </figcaption>
         </figure>
 
         <p class="usage">
           Run <code>clor search</code> to search the live catalog,
           <code>clor select</code> to choose favorites, and
-          <code>clor claude</code> to start an OpenRouter session. Your ordinary
-          <code>claude</code> command remains a native session.
+          plain <code>claude</code> to start. The same configuration works with
+          <code>claude --agent</code>, background agents, and the
+          <code>claude agents</code> view.
         </p>
 
         <div class="note">
-          Your OpenRouter key stays in a local mode-0600 credential file. With a
-          native Claude.ai login, connectors remain available and the
-          external-auth warning is absent. Reset tool data with
-          <code>clor reset</code>.
+          Secret-bearing files stay local with mode 0600. Your native Claude.ai
+          login remains available for connectors while model requests route
+          through OpenRouter. Reset everything with <code>clor reset</code>.
         </div>
       </main>
 

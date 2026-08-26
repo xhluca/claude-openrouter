@@ -98,7 +98,7 @@ python3 "$script_dir/verify-demo-cast.py" \
   'curl -LsSf https://xhluca.github.io/claude-openrouter/install.sh' \
   'clor search glm-5.3-flash' \
   'clor select z-ai/glm-5.3-flash' \
-  'clor claude' \
+  'claude' \
   'z-ai/glm-5.3-flash' \
   'Hello from GLM-5.3-Flash.'
 

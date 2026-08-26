@@ -4,7 +4,7 @@ import io
 
 from claude_openrouter import cli
 from claude_openrouter.openrouter import write_credential
-from claude_openrouter.paths import launch_settings_path
+from claude_openrouter.paths import claude_settings_path
 
 KEY = "sk-or-v1-this-is-a-fake-test-key"
 
@@ -110,6 +110,7 @@ def test_setup_from_stdin_writes_favorites(
     monkeypatch.setattr(cli, "validate_key", lambda _key: None)
     monkeypatch.setattr(cli, "refresh_catalog", lambda _key=None: sample_models)
     monkeypatch.setattr(cli, "_warn_claude_compatibility", lambda: None)
+    monkeypatch.setattr(cli, "has_native_login", lambda: True)
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO(f"{KEY}\n"))
 
     assert (
@@ -134,6 +135,7 @@ def test_select_positional_maps_to_one_model(
 ) -> None:
     write_credential(KEY)
     monkeypatch.setattr(cli, "refresh_catalog", lambda _key=None: sample_models)
+    monkeypatch.setattr(cli, "has_native_login", lambda: True)
     assert cli.main(["select", "google/gemini-3.1-pro-preview"]) == 0
     assert "Saved 1 /model favorite" in capsys.readouterr().out
 
@@ -147,11 +149,13 @@ def test_select_rejects_ambiguous_arguments(isolated_home, sample_models, monkey
 def test_claude_prepares_favorites_then_launches(
     isolated_home, sample_models, monkeypatch
 ) -> None:
+    write_credential(KEY)
     monkeypatch.setattr(cli, "favorite_ids", lambda: ["qwen/qwen3-coder"])
     monkeypatch.setattr(cli, "load_catalog", lambda: sample_models)
+    monkeypatch.setattr(cli, "has_native_login", lambda: True)
     launched = []
     monkeypatch.setattr(cli, "launch_claude", launched.append)
 
     assert cli.main(["claude", "--continue"]) == 0
     assert launched == [["--continue"]]
-    assert "qwen/qwen3-coder" in launch_settings_path().read_text()
+    assert "qwen/qwen3-coder" in claude_settings_path().read_text()

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import picker_row
+from .openrouter import read_credential
 from .paths import (
     backup_path,
     cache_dir,
@@ -23,7 +24,9 @@ from .storage import atomic_write_json, atomic_write_text, read_json_object
 
 BASE_URL = "https://openrouter.ai/api"
 ROOT_FIELDS = ("apiKeyHelper", "modelPicker", "model")
-ENV_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+LEGACY_ENV_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+ENV_FIELDS = (*LEGACY_ENV_FIELDS, "ANTHROPIC_CUSTOM_HEADERS")
+BACKUP_VERSION = 2
 
 
 def _field_snapshot(document: dict[str, Any], field: str) -> dict[str, Any]:
@@ -47,7 +50,7 @@ def _capture_backup(settings: dict[str, Any], existed: bool) -> None:
     atomic_write_json(
         path,
         {
-            "version": 1,
+            "version": BACKUP_VERSION,
             "settings_path": str(claude_settings_path()),
             "settings_existed": existed,
             "root": {field: _field_snapshot(settings, field) for field in ROOT_FIELDS},
@@ -92,26 +95,105 @@ def save_preferences(models: list[dict[str, Any]], default_model: str) -> None:
     )
 
 
-def configure_claude(models: list[dict[str, Any]]) -> Path:
-    """Write launch-scoped model settings without taking over native Claude auth."""
+def _without_authorization(headers: str | None) -> str:
+    if not headers:
+        return ""
+    return "\n".join(
+        line
+        for line in headers.splitlines()
+        if line.partition(":")[0].strip().casefold() != "authorization"
+    ).strip()
+
+
+def _openrouter_headers(headers: str | None, key: str) -> str:
+    existing = _without_authorization(headers)
+    authorization = f"Authorization: Bearer {key}"
+    return "\n".join(part for part in (existing, authorization) if part)
+
+
+def _active_backup() -> bool:
+    path = backup_path()
+    if not path.exists():
+        return False
+    return read_json_object(path).get("version") == BACKUP_VERSION
+
+
+def configure_claude(models: list[dict[str, Any]], *, native_login: bool = True) -> Path:
+    """Route ordinary Claude Code sessions through OpenRouter.
+
+    The bearer token is a custom request header rather than an external Claude
+    authentication source, so Claude Code can retain its native Claude.ai login
+    for connectors and agent features.
+    """
     if not models:
         raise ValueError("select at least one model")
-    migrate_legacy_settings()
+    if not _active_backup():
+        migrate_legacy_settings()
+
+    path = claude_settings_path()
+    existed = path.exists()
+    settings = read_json_object(path, missing_ok=True)
+    existing_env = settings.get("env")
+    if existing_env is not None and not isinstance(existing_env, dict):
+        raise RuntimeError(f"the env setting in {path} must be a JSON object")
+    _capture_backup(settings, existed)
+
     old_preferences = load_preferences()
     old_default = old_preferences.get("default_model")
     ids = [str(model["id"]) for model in models]
     default_model = old_default if isinstance(old_default, str) and old_default in ids else ids[0]
-    settings = {
-        "modelPicker": {
-            "options": [picker_row(model) for model in models],
-            "replaceBuiltInOptions": True,
-        },
-        "model": default_model,
+
+    settings.pop("apiKeyHelper", None)
+    env = dict(existing_env or {})
+    env["ANTHROPIC_BASE_URL"] = BASE_URL
+    env.pop("ANTHROPIC_API_KEY", None)
+    previous_headers = env.get("ANTHROPIC_CUSTOM_HEADERS")
+    if previous_headers is not None and not isinstance(previous_headers, str):
+        raise RuntimeError(f"ANTHROPIC_CUSTOM_HEADERS in {path} must be a string")
+    key = read_credential()
+    if native_login:
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        env["ANTHROPIC_CUSTOM_HEADERS"] = _openrouter_headers(previous_headers, key)
+    else:
+        env["ANTHROPIC_AUTH_TOKEN"] = key
+        headers = _without_authorization(previous_headers)
+        if headers:
+            env["ANTHROPIC_CUSTOM_HEADERS"] = headers
+        else:
+            env.pop("ANTHROPIC_CUSTOM_HEADERS", None)
+    settings["env"] = env
+    settings["modelPicker"] = {
+        "options": [picker_row(model) for model in models],
+        "replaceBuiltInOptions": True,
     }
-    path = launch_settings_path()
+    settings["model"] = default_model
     atomic_write_json(path, settings)
+    launch_settings_path().unlink(missing_ok=True)
+    helper_path().unlink(missing_ok=True)
     save_preferences(models, default_model)
     return path
+
+
+def refresh_claude_credential(key: str) -> bool:
+    """Update the managed request header after ``clor config`` changes the key."""
+    if not _active_backup() or not claude_settings_path().exists():
+        return False
+    path = claude_settings_path()
+    settings = read_json_object(path)
+    env = settings.get("env")
+    if not isinstance(env, dict) or env.get("ANTHROPIC_BASE_URL") != BASE_URL:
+        return False
+    updated_env = dict(env)
+    if "ANTHROPIC_AUTH_TOKEN" in updated_env:
+        updated_env["ANTHROPIC_AUTH_TOKEN"] = key
+    else:
+        headers = env.get("ANTHROPIC_CUSTOM_HEADERS")
+        if headers is not None and not isinstance(headers, str):
+            raise RuntimeError(f"ANTHROPIC_CUSTOM_HEADERS in {path} must be a string")
+        updated_env["ANTHROPIC_CUSTOM_HEADERS"] = _openrouter_headers(headers, key)
+    settings["env"] = updated_env
+    atomic_write_json(path, settings)
+    return True
 
 
 def _restore_snapshot(document: dict[str, Any], field: str, snapshot: dict[str, Any]) -> None:
@@ -159,7 +241,9 @@ def restore_claude_settings() -> bool:
         if env is not None and not isinstance(env, dict):
             raise RuntimeError(f"the env setting in {path} must be a JSON object")
         env_object = dict(env or {})
-        for field in ENV_FIELDS:
+        backup_version = backup.get("version", 1)
+        fields = ENV_FIELDS if backup_version == BACKUP_VERSION else LEGACY_ENV_FIELDS
+        for field in fields:
             snapshot = env_backup.get(field)
             if not isinstance(snapshot, dict):
                 raise RuntimeError(f"invalid environment backup field {field}")
@@ -198,6 +282,12 @@ def restore_claude_settings() -> bool:
             for field in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
                 if env.get(field) == "":
                     env.pop(field, None)
+            if managed_base and isinstance(env.get("ANTHROPIC_CUSTOM_HEADERS"), str):
+                headers = _without_authorization(env["ANTHROPIC_CUSTOM_HEADERS"])
+                if headers:
+                    env["ANTHROPIC_CUSTOM_HEADERS"] = headers
+                else:
+                    env.pop("ANTHROPIC_CUSTOM_HEADERS", None)
             if env:
                 settings["env"] = env
             else:
@@ -212,7 +302,9 @@ def restore_claude_settings() -> bool:
 
 def migrate_legacy_settings() -> bool:
     """Restore the pre-0.2 global integration and retire its auth helper."""
-    legacy_present = backup_path().exists() or helper_path().exists()
+    legacy_present = helper_path().exists()
+    if backup_path().exists():
+        legacy_present = read_json_object(backup_path()).get("version", 1) != BACKUP_VERSION
     if not legacy_present and claude_settings_path().exists():
         settings = read_json_object(claude_settings_path())
         legacy_present = (
@@ -228,6 +320,7 @@ def migrate_legacy_settings() -> bool:
     restored = restore_claude_settings()
     backup_path().unlink(missing_ok=True)
     helper_path().unlink(missing_ok=True)
+    launch_settings_path().unlink(missing_ok=True)
     return restored
 
 
@@ -250,11 +343,14 @@ def reset_integration() -> bool:
 
 def assert_private_files() -> None:
     """Raise if a secret-bearing file is accessible by group or other users."""
-    for path in (
+    paths = [
         credential_path(),
         preferences_path(),
         helper_path(),
         launch_settings_path(),
-    ):
+    ]
+    if _active_backup():
+        paths.append(claude_settings_path())
+    for path in paths:
         if path.exists() and stat.S_IMODE(path.stat().st_mode) & 0o077:
             raise RuntimeError(f"insecure permissions on {path}")
