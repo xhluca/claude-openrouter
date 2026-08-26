@@ -133,7 +133,7 @@ expect -exact "  - z-ai/glm-5.3-flash"
 expect -exact $prompt
 
 visible_pause 2000
-type_command "claude"
+type_command "clor claude"
 wait_for_pane $tmux_socket {manual mode on} 30000 \
     "Claude Code did not open its full-screen TUI"
 visible_pause 1800

@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .launcher import launch_claude
 from .models import exact_models, print_models, search_models
 from .openrouter import (
+    load_catalog,
     read_credential,
     refresh_catalog,
     validate_key,
@@ -95,6 +97,15 @@ def parser() -> argparse.ArgumentParser:
         "update",
         aliases=["upgrade"],
         help="install the latest Claude OpenRouter release",
+    )
+    claude = commands.add_parser(
+        "claude",
+        help="launch Claude Code with OpenRouter favorites and native connectors",
+    )
+    claude.add_argument(
+        "claude_args",
+        nargs=argparse.REMAINDER,
+        help="arguments passed through to Claude Code",
     )
     return root
 
@@ -259,15 +270,15 @@ def command_setup(*, key_stdin: bool, no_validate: bool, ids: list[str] | None) 
         f"{_styled('Model index:', '1;36')} "
         f"{_styled(catalog_path(), '36')} {_styled(f'({len(models)} models)', '2')}"
     )
-    print(f"{_styled('Claude Code settings:', '1;36')} {_styled(settings, '36')}")
+    print(f"{_styled('OpenRouter launch settings:', '1;36')} {_styled(settings, '36')}")
     print()
     print(_styled("Favorites:", "1;35"))
     for model in selected:
         print(f"  {_styled('●', '1;32')} {_styled(model['id'], '1;36')}")
     print()
     print(
-        f"{_styled('Next:', '1;33')} restart Claude Code, then use "
-        f"{_styled('/model', '1;35')} to switch favorites."
+        f"{_styled('Next:', '1;33')} run {_styled('clor claude', '1;32')}, then use "
+        f"{_styled('/model', '1;35')} to switch OpenRouter favorites."
     )
     return 0
 
@@ -310,6 +321,16 @@ def command_config(*, key_stdin: bool, no_validate: bool) -> int:
     return 0
 
 
+def command_claude(arguments: list[str]) -> int:
+    ids = favorite_ids()
+    if not ids:
+        raise RuntimeError("no OpenRouter favorites are configured; run setup")
+    configure_claude(exact_models(load_catalog(), ids))
+    assert_private_files()
+    launch_claude(arguments)
+    return 0
+
+
 def command_reset() -> int:
     restored = reset_integration()
     if restored:
@@ -334,7 +355,12 @@ def command_uninstall() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parser().parse_args(argv)
+    raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    if raw_arguments[:1] == ["claude"]:
+        args = parser().parse_args(["claude"])
+        args.claude_args = raw_arguments[1:]
+    else:
+        args = parser().parse_args(raw_arguments)
     try:
         if args.command in {"index", "fetch"}:
             return command_index(as_json=args.json)
@@ -357,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in {"update", "upgrade"}:
             update_installed_package(__version__)
             return 0
+        if args.command == "claude":
+            return command_claude(args.claude_args)
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

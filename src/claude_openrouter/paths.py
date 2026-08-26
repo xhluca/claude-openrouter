@@ -36,6 +36,10 @@ def credential_path() -> Path:
     return config_dir() / "credential"
 
 
+def launch_settings_path() -> Path:
+    return config_dir() / "claude-settings.json"
+
+
 def helper_path() -> Path:
     return config_dir() / "api-key-helper.sh"
 
@@ -50,4 +54,3 @@ def catalog_path() -> Path:
 
 def backup_path() -> Path:
     return state_dir() / "claude-settings-backup.json"
-

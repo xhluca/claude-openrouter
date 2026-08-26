@@ -4,10 +4,10 @@
 set -eu
 
 package_name="claude-openrouter"
-package_version="0.1.5"
+package_version="0.2.0"
 wheel_name="claude_openrouter-${package_version}-py3-none-any.whl"
 # Filled from the release artifact by scripts/build-release.sh.
-wheel_sha256="ae65a8da05a8c260f5e458043770d1d463e3867572879e622ac2e6d7d79c9271"
+wheel_sha256="67fa13fd909710dc19b91fbb5e8a1ff83ff245144a3e53122e0a61e572eff996"
 pypi_index_url="${CLAUDE_OPENROUTER_PYPI_INDEX_URL:-https://pypi.org/simple}"
 release_base_url="${CLAUDE_OPENROUTER_INSTALL_BASE_URL:-https://xhluca.github.io/claude-openrouter/releases/${package_version}}"
 package_spec="${package_name}==${package_version}"
@@ -183,4 +183,4 @@ else
   die "interactive setup needs a terminal; rerun claude-openrouter setup directly"
 fi
 
-printf '\nClaude Code is ready. Run: claude\n'
+printf '\nClaude OpenRouter is ready. Run: clor claude\n'

@@ -1,0 +1,51 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - uses: actions/configure-pages@v5
+      - run: uv build
+      - name: Assemble static site
+        run: |
+          mkdir -p _site/assets
+          cp -R site/. _site/
+          cp install.sh _site/install.sh
+          cp docs/assets/demo.cast docs/assets/demo.gif docs/assets/demo.mp4 _site/assets/
+          version=$(uv run python -c 'from claude_openrouter import __version__; print(__version__)')
+          mkdir -p "_site/releases/$version"
+          cp dist/*.whl dist/*.tar.gz "_site/releases/$version/"
+          (cd "_site/releases/$version" && sha256sum ./* > SHA256SUMS)
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

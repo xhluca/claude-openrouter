@@ -15,6 +15,7 @@ from .paths import (
     config_dir,
     credential_path,
     helper_path,
+    launch_settings_path,
     preferences_path,
     state_dir,
 )
@@ -92,36 +93,22 @@ def save_preferences(models: list[dict[str, Any]], default_model: str) -> None:
 
 
 def configure_claude(models: list[dict[str, Any]]) -> Path:
+    """Write launch-scoped model settings without taking over native Claude auth."""
     if not models:
         raise ValueError("select at least one model")
-    path = claude_settings_path()
-    existed = path.exists()
-    settings = read_json_object(path, missing_ok=True)
-    existing_env = settings.get("env")
-    if existing_env is not None and not isinstance(existing_env, dict):
-        raise RuntimeError(f"the env setting in {path} must be a JSON object")
-    _capture_backup(settings, existed)
-
+    migrate_legacy_settings()
     old_preferences = load_preferences()
     old_default = old_preferences.get("default_model")
     ids = [str(model["id"]) for model in models]
     default_model = old_default if isinstance(old_default, str) and old_default in ids else ids[0]
-
-    write_key_helper()
-    settings["apiKeyHelper"] = str(helper_path().resolve())
-    env = existing_env
-    if env is None:
-        env = {}
-    env = dict(env)
-    env["ANTHROPIC_BASE_URL"] = BASE_URL
-    env["ANTHROPIC_API_KEY"] = ""
-    env["ANTHROPIC_AUTH_TOKEN"] = ""
-    settings["env"] = env
-    settings["modelPicker"] = {
-        "options": [picker_row(model) for model in models],
-        "replaceBuiltInOptions": True,
+    settings = {
+        "modelPicker": {
+            "options": [picker_row(model) for model in models],
+            "replaceBuiltInOptions": True,
+        },
+        "model": default_model,
     }
-    settings["model"] = default_model
+    path = launch_settings_path()
     atomic_write_json(path, settings)
     save_preferences(models, default_model)
     return path
@@ -182,21 +169,66 @@ def restore_claude_settings() -> bool:
         else:
             settings.pop("env", None)
     else:
-        if settings.get("apiKeyHelper") == str(helper_path().resolve()):
-            settings.pop("apiKeyHelper", None)
-        if _looks_managed_picker(settings.get("modelPicker")):
-            settings.pop("modelPicker", None)
+        managed_helper = settings.get("apiKeyHelper") == str(helper_path().resolve())
+        managed_picker = _looks_managed_picker(settings.get("modelPicker"))
+        picker = settings.get("modelPicker")
+        picker_options = picker.get("options", []) if isinstance(picker, dict) else []
+        managed_model_ids = {
+            row.get("model") for row in picker_options if isinstance(row, dict)
+        }
+        managed_model = settings.get("model") in managed_model_ids
         env = settings.get("env")
-        if isinstance(env, dict) and env.get("ANTHROPIC_BASE_URL") == BASE_URL:
+        managed_base = (
+            isinstance(env, dict) and env.get("ANTHROPIC_BASE_URL") == BASE_URL
+        )
+        if not (managed_helper or managed_picker or managed_base):
+            return False
+        if managed_helper:
+            settings.pop("apiKeyHelper", None)
+        if managed_picker:
+            settings.pop("modelPicker", None)
+        if managed_model:
+            settings.pop("model", None)
+        if isinstance(env, dict) and (
+            managed_helper or managed_picker or env.get("ANTHROPIC_BASE_URL") == BASE_URL
+        ):
             env = dict(env)
-            env.pop("ANTHROPIC_BASE_URL", None)
-            settings["env"] = env
+            if env.get("ANTHROPIC_BASE_URL") == BASE_URL:
+                env.pop("ANTHROPIC_BASE_URL", None)
+            for field in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+                if env.get(field) == "":
+                    env.pop(field, None)
+            if env:
+                settings["env"] = env
+            else:
+                settings.pop("env", None)
 
     if settings:
         atomic_write_json(path, settings)
     else:
         path.unlink()
     return True
+
+
+def migrate_legacy_settings() -> bool:
+    """Restore the pre-0.2 global integration and retire its auth helper."""
+    legacy_present = backup_path().exists() or helper_path().exists()
+    if not legacy_present and claude_settings_path().exists():
+        settings = read_json_object(claude_settings_path())
+        legacy_present = (
+            settings.get("apiKeyHelper") == str(helper_path().resolve())
+            or _looks_managed_picker(settings.get("modelPicker"))
+            or (
+                isinstance(settings.get("env"), dict)
+                and settings["env"].get("ANTHROPIC_BASE_URL") == BASE_URL
+            )
+        )
+    if not legacy_present:
+        return False
+    restored = restore_claude_settings()
+    backup_path().unlink(missing_ok=True)
+    helper_path().unlink(missing_ok=True)
+    return restored
 
 
 def _remove_private_tree(path: Path) -> None:
@@ -218,6 +250,11 @@ def reset_integration() -> bool:
 
 def assert_private_files() -> None:
     """Raise if a secret-bearing file is accessible by group or other users."""
-    for path in (credential_path(), preferences_path(), helper_path()):
+    for path in (
+        credential_path(),
+        preferences_path(),
+        helper_path(),
+        launch_settings_path(),
+    ):
         if path.exists() and stat.S_IMODE(path.stat().st_mode) & 0o077:
             raise RuntimeError(f"insecure permissions on {path}")

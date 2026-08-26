@@ -58,6 +58,15 @@ export CLOR_DEMO_KEY_FILE="$demo_key_file"
 
 python3 "$script_dir/prepare-demo.py" "$CLAUDE_CONFIG_DIR" "$repo_dir"
 
+claude_credentials_source="${CLOR_DEMO_CLAUDE_CREDENTIALS_FILE:-${HOME}/.claude/.credentials.json}"
+if [[ ! -s "$claude_credentials_source" ]]; then
+  echo "a native Claude.ai login is required to demonstrate connector-compatible auth" >&2
+  echo "run claude /login or set CLOR_DEMO_CLAUDE_CREDENTIALS_FILE" >&2
+  exit 2
+fi
+install -m 600 "$claude_credentials_source" "$CLAUDE_CONFIG_DIR/.credentials.json"
+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude auth status --json >/dev/null
+
 asciinema rec \
   --quiet \
   --overwrite \
@@ -79,12 +88,17 @@ if grep -Eq 'sk-or-[A-Za-z0-9_-]+' "$asset_dir/demo.cast"; then
   echo "refusing to publish a cast containing a key-shaped string" >&2
   exit 1
 fi
+if grep -Fq 'connectors are disabled' "$asset_dir/demo.cast"; then
+  echo "refusing to publish a demo with Claude.ai connectors disabled" >&2
+  exit 1
+fi
 
 python3 "$script_dir/verify-demo-cast.py" \
   "$asset_dir/demo.cast" \
   'curl -LsSf https://xhluca.github.io/claude-openrouter/install.sh' \
   'clor search glm-5.3-flash' \
   'clor select z-ai/glm-5.3-flash' \
+  'clor claude' \
   'z-ai/glm-5.3-flash' \
   'Hello from GLM-5.3-Flash.'
 

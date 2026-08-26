@@ -4,6 +4,7 @@ import io
 
 from claude_openrouter import cli
 from claude_openrouter.openrouter import write_credential
+from claude_openrouter.paths import launch_settings_path
 
 KEY = "sk-or-v1-this-is-a-fake-test-key"
 
@@ -20,6 +21,12 @@ def test_fetch_alias_parses() -> None:
 def test_update_and_upgrade_parse() -> None:
     assert cli.parser().parse_args(["update"]).command == "update"
     assert cli.parser().parse_args(["upgrade"]).command == "upgrade"
+
+
+def test_claude_passes_through_arguments() -> None:
+    args = cli.parser().parse_args(["claude"])
+    assert args.command == "claude"
+    assert args.claude_args == []
 
 
 def test_update_dispatches_with_current_version(monkeypatch) -> None:
@@ -135,3 +142,16 @@ def test_select_rejects_ambiguous_arguments(isolated_home, sample_models, monkey
     write_credential(KEY)
     monkeypatch.setattr(cli, "refresh_catalog", lambda _key=None: sample_models)
     assert cli.main(["select", "qwen/qwen3-coder", "--model", "other/model"]) == 1
+
+
+def test_claude_prepares_favorites_then_launches(
+    isolated_home, sample_models, monkeypatch
+) -> None:
+    monkeypatch.setattr(cli, "favorite_ids", lambda: ["qwen/qwen3-coder"])
+    monkeypatch.setattr(cli, "load_catalog", lambda: sample_models)
+    launched = []
+    monkeypatch.setattr(cli, "launch_claude", launched.append)
+
+    assert cli.main(["claude", "--continue"]) == 0
+    assert launched == [["--continue"]]
+    assert "qwen/qwen3-coder" in launch_settings_path().read_text()

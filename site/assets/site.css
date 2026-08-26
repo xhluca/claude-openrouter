@@ -1,0 +1,159 @@
+:root {
+  color-scheme: dark;
+  --background: #0d0f0e;
+  --surface: #171816;
+  --text: #f4f1ec;
+  --muted: #aaa59e;
+  --line: #302f2c;
+  --accent: #d97757;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--background);
+}
+
+a { color: inherit; }
+code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+
+.page {
+  width: min(780px, calc(100% - 40px));
+  min-height: 100vh;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+header,
+footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 0;
+  font-size: 14px;
+}
+
+header { border-bottom: 1px solid var(--line); }
+
+footer {
+  margin-top: auto;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+.name { font-weight: 700; text-decoration: none; }
+nav { display: flex; gap: 20px; }
+nav a,
+footer a { color: var(--muted); }
+nav a:hover,
+footer a:hover { color: var(--text); }
+
+main { padding: 96px 0 76px; }
+
+.label {
+  margin: 0 0 18px;
+  color: var(--accent);
+  font: 700 12px/1.4 "SFMono-Regular", Consolas, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  max-width: 700px;
+  margin: 0 0 24px;
+  font-size: clamp(44px, 8vw, 70px);
+  line-height: 1.02;
+  letter-spacing: -.045em;
+}
+
+.intro,
+.usage {
+  max-width: 680px;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.intro code,
+.usage code,
+.note code { color: var(--text); }
+
+.install {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin: 38px 0 34px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.install code {
+  min-width: 0;
+  padding-left: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.install button {
+  padding: 10px 14px;
+  color: #17110f;
+  background: var(--accent);
+  border: 0;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.install button.copied { background: var(--text); }
+
+.demo {
+  width: min(900px, calc(100vw - 48px));
+  margin: 36px 0 30px 50%;
+  transform: translateX(-50%);
+}
+
+.demo img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .3);
+}
+
+.demo figcaption {
+  margin-top: 10px;
+  color: var(--muted);
+  font: 11px/1.5 "SFMono-Regular", Consolas, monospace;
+}
+
+.note {
+  margin-top: 38px;
+  padding: 20px 22px;
+  color: var(--muted);
+  background: var(--surface);
+  border-left: 2px solid var(--accent);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+@media (max-width: 620px) {
+  .page { width: min(100% - 28px, 780px); }
+  header,
+  footer { padding: 20px 0; }
+  main { padding: 66px 0 54px; }
+  h1 { font-size: clamp(40px, 13vw, 58px); }
+  .intro,
+  .usage { font-size: 16px; }
+  .install { grid-template-columns: 1fr; }
+  .install code { padding: 6px 4px; }
+  .install button { width: 100%; }
+  .demo { width: calc(100vw - 28px); }
+}

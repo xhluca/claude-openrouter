@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from claude_openrouter import __version__
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -21,6 +23,12 @@ def test_installer_help_does_not_require_network() -> None:
     assert "--install-only" in result.stdout
 
 
+def test_installer_release_matches_package_version() -> None:
+    installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert f'package_version="{__version__}"' in installer
+    assert 'wheel_sha256="TO_BE_REPLACED"' not in installer
+
+
 def test_uv_installs_use_copy_mode_to_avoid_cross_filesystem_warnings() -> None:
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     commands = [line.strip() for line in installer.splitlines() if "uv tool install" in line]
@@ -33,3 +41,14 @@ def test_readme_keeps_acknowledgements_at_bottom() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert readme.rstrip().endswith("management spectrum.")
     assert "Claude Code Router (CCR)" in readme
+
+
+def test_pages_source_keeps_short_installer_and_launch_command() -> None:
+    site = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "pages.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "https://xhluca.github.io/claude-openrouter/install.sh" in site
+    assert "clor claude" in site
+    assert "actions/upload-pages-artifact@v4" in workflow
+    assert "actions/deploy-pages@v4" in workflow

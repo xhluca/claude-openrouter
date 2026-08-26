@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0d0f0e">
+    <meta name="description" content="Use OpenRouter models in Claude Code while keeping native login and connectors.">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Claude OpenRouter">
+    <meta property="og:description" content="A small CLI that connects Claude Code to OpenRouter.">
+    <meta property="og:url" content="https://xhluca.github.io/claude-openrouter/">
+    <link rel="canonical" href="https://xhluca.github.io/claude-openrouter/">
+    <link rel="stylesheet" href="assets/site.css?v=2">
+    <title>Claude OpenRouter — OpenRouter models in Claude Code</title>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <a class="name" href="./">Claude OpenRouter</a>
+        <nav aria-label="Project links">
+          <a href="https://github.com/xhluca/claude-openrouter">GitHub</a>
+          <a href="https://pypi.org/project/claude-openrouter/">PyPI</a>
+        </nav>
+      </header>
+
+      <main>
+        <p class="label">OpenRouter models in Claude Code</p>
+        <h1>Your models. Claude's picker.</h1>
+        <p class="intro">
+          Add OpenRouter favorites to Claude Code's native <code>/model</code>
+          menu while preserving your Claude.ai login and connectors. No proxy
+          or background service.
+        </p>
+
+        <div class="install" aria-label="Installation command">
+          <code id="install-command">curl -LsSf https://xhluca.github.io/claude-openrouter/install.sh | sh</code>
+          <button type="button" data-copy="install-command" aria-label="Copy install command">Copy</button>
+        </div>
+
+        <figure class="demo">
+          <img src="assets/demo.gif?v=3" alt="Installing Claude OpenRouter, entering a masked API key, selecting GLM-5.3-Flash, and receiving a live Claude Code response">
+          <figcaption>
+            Real-time curl install · masked key · live GLM-5.3-Flash response ·
+            <a href="assets/demo.mp4?v=3">MP4</a> ·
+            <a href="assets/demo.cast?v=3">asciicast</a>
+          </figcaption>
+        </figure>
+
+        <p class="usage">
+          Run <code>clor search</code> to search the live catalog,
+          <code>clor select</code> to choose favorites, and
+          <code>clor claude</code> to start an OpenRouter session. Your ordinary
+          <code>claude</code> command remains a native session.
+        </p>
+
+        <div class="note">
+          Your OpenRouter key stays in a local mode-0600 credential file. With a
+          native Claude.ai login, connectors remain available and the
+          external-auth warning is absent. Reset tool data with
+          <code>clor reset</code>.
+        </div>
+      </main>
+
+      <footer>
+        <span>MIT · Independent project</span>
+        <a href="install.sh">View installer</a>
+      </footer>
+    </div>
+    <script src="assets/site.js?v=1"></script>
+  </body>
+</html>
