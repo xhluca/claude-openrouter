@@ -22,6 +22,13 @@ def main() -> int:
         "lastOnboardingVersion": "2.1.242",
         "opusProMigrationComplete": True,
         "sonnet1m45MigrationComplete": True,
+        "announcementImpressions": {
+            "fable-5-promo-2": 10,
+            "fable-5-promo-2-2": 10,
+            "fable-5-promo-2-3": 10,
+            "fable-5-promo-2-4-max": 10,
+            "opus-5-launch": 10,
+        },
         "projects": {
             str(project_dir): {
                 "allowedTools": [],
