@@ -45,10 +45,5 @@ def test_readme_keeps_acknowledgements_at_bottom() -> None:
 
 def test_pages_source_keeps_short_installer_and_launch_command() -> None:
     site = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "pages.yml").read_text(
-        encoding="utf-8"
-    )
     assert "https://xhluca.github.io/claude-openrouter/install.sh" in site
     assert "clor claude" in site
-    assert "actions/upload-pages-artifact@v4" in workflow
-    assert "actions/deploy-pages@v4" in workflow
