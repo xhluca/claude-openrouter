@@ -9,7 +9,7 @@ wheel_name="claude_openrouter-${package_version}-py3-none-any.whl"
 # Filled from the release artifact by scripts/build-release.sh.
 wheel_sha256="8fbf3db4bdc4671e6d3566429491cbd7f1c6fc3a104b0dbb0e28c4a0092b96c4"
 pypi_index_url="${CLAUDE_OPENROUTER_PYPI_INDEX_URL:-https://pypi.org/simple}"
-release_base_url="${CLAUDE_OPENROUTER_INSTALL_BASE_URL:-https://github.com/xhluca/claude-openrouter/releases/download/v${package_version}}"
+release_base_url="${CLAUDE_OPENROUTER_INSTALL_BASE_URL:-https://xhluca.github.io/claude-openrouter/releases/${package_version}}"
 package_spec="${package_name}==${package_version}"
 
 die() {
@@ -22,7 +22,7 @@ usage() {
 Install Claude OpenRouter for the current user and run its guided setup.
 
 Usage:
-  curl -LsSf https://raw.githubusercontent.com/xhluca/claude-openrouter/main/install.sh | sh
+  curl -LsSf https://xhluca.github.io/claude-openrouter/install.sh | sh
   sh install.sh [options]
 
 Options:
