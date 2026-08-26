@@ -25,7 +25,8 @@ curl -LsSf https://xhluca.github.io/claude-openrouter/install.sh | sh
 
 The installer prompts for your OpenRouter key without echoing it, fetches the
 current catalog, and opens the model picker immediately. It installs for the
-current user on Linux or macOS.
+current user on Linux or macOS. If a credential already exists, setup shows its
+path and asks whether to reuse it before offering a masked replacement prompt.
 
 Or use `uv`:
 
@@ -74,9 +75,9 @@ clor select
 ```
 
 The positional value is shorthand for `--model`. Each non-interactive call
-replaces the saved favorite set. In the picker, type a search and press Enter,
-use the arrow keys, press Enter or Space to select and deselect, `/` to search
-again, and `s` to save.
+replaces the saved favorite set. In the picker, type a search and press Down or
+Enter to browse its results. Press Enter or Space to select and deselect; press
+Up past the first result or Esc to focus the search again; press `s` to save.
 
 Restart Claude Code, then switch normally:
 

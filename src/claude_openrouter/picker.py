@@ -31,12 +31,17 @@ def _draw(
     prompt = f"Search: {query}"
     screen.addnstr(2, 0, prompt, max(1, width - 1))
     if search_mode:
-        screen.addnstr(3, 0, "Type a term, then press Enter to browse matches.", width - 1)
+        screen.addnstr(
+            3,
+            0,
+            "Type to filter · ↓/Enter browse · Ctrl-C cancel",
+            width - 1,
+        )
     else:
         screen.addnstr(
             3,
             0,
-            "↑/↓ move · Enter/Space select · / search · s save · q cancel",
+            "↑/↓ move · Enter/Space select · Esc search · s save · q cancel",
             width - 1,
         )
     screen.addnstr(4, 0, f"Selected: {len(selected)}", width - 1, curses.A_BOLD)
@@ -71,15 +76,20 @@ def _curses_picker(models: list[dict[str, Any]], initial: list[str]) -> list[str
             _draw(screen, results, query, cursor, selected, search_mode)
             key = screen.get_wch()
             if search_mode:
-                if key in ("\n", "\r", curses.KEY_ENTER):
-                    search_mode = False
-                    cursor = 0
+                if key in ("\n", "\r", curses.KEY_ENTER, curses.KEY_DOWN):
+                    if results:
+                        search_mode = False
+                        cursor = 0
+                    else:
+                        curses.beep()
                 elif key in ("\b", "\x7f", curses.KEY_BACKSPACE):
                     query = query[:-1]
                     results = top_matches(models, query)
                     cursor = 0
-                elif key == "\x1b":
+                elif key == "\x03":
                     return None
+                elif key == "\x1b":
+                    continue
                 elif isinstance(key, str) and key.isprintable():
                     query += key
                     results = top_matches(models, query)
@@ -87,7 +97,10 @@ def _curses_picker(models: list[dict[str, Any]], initial: list[str]) -> list[str
                 continue
 
             if key in (curses.KEY_UP, "k"):
-                cursor = max(0, cursor - 1)
+                if cursor == 0:
+                    search_mode = True
+                else:
+                    cursor -= 1
             elif key in (curses.KEY_DOWN, "j"):
                 cursor = min(max(0, len(results) - 1), cursor + 1)
             elif key in ("\n", "\r", " ", curses.KEY_ENTER) and results:
@@ -97,11 +110,13 @@ def _curses_picker(models: list[dict[str, Any]], initial: list[str]) -> list[str
                 results = top_matches(models, query)
                 cursor = 0
                 search_mode = True
+            elif key == "\x1b":
+                search_mode = True
             elif key in ("s", "S"):
                 if selected:
                     return selected
                 curses.beep()
-            elif key in ("q", "Q", "\x1b"):
+            elif key in ("q", "Q", "\x03"):
                 return None
 
     return curses.wrapper(run)
@@ -149,4 +164,3 @@ def choose_models(models: list[dict[str, Any]], initial: list[str]) -> list[str]
         return _curses_picker(models, initial)
     except curses.error:
         return _line_picker(models, initial)
-

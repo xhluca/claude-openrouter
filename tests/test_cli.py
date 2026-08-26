@@ -18,6 +18,40 @@ def test_masked_input_falls_back_for_non_terminal(monkeypatch) -> None:
     assert cli._masked_input("Key: ") == "Key: secret"
 
 
+def test_existing_key_is_reused_after_confirmation(isolated_home, monkeypatch, capsys) -> None:
+    write_credential(KEY)
+    monkeypatch.setattr("builtins.input", lambda prompt: print(prompt) or "yes")
+    monkeypatch.setattr(
+        cli,
+        "_masked_input",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("must not prompt for a new key")),
+    )
+
+    assert cli._read_key(from_stdin=False) == KEY
+    assert str(cli.credential_path()) in capsys.readouterr().out
+
+
+def test_existing_key_can_be_replaced(isolated_home, monkeypatch) -> None:
+    write_credential(KEY)
+    replacement = "sk-or-v1-this-is-a-new-test-key"
+    monkeypatch.setattr("builtins.input", lambda _prompt: "no")
+    monkeypatch.setattr(cli, "_masked_input", lambda prompt: replacement if prompt else "")
+
+    assert cli._read_key(from_stdin=False) == replacement
+
+
+def test_key_stdin_does_not_offer_reuse(isolated_home, monkeypatch) -> None:
+    write_credential(KEY)
+    replacement = "sk-or-v1-this-came-from-stdin"
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(f"{replacement}\n"))
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("must not ask interactively")),
+    )
+
+    assert cli._read_key(from_stdin=True) == replacement
+
+
 def test_search_always_refreshes(sample_models, monkeypatch, capsys) -> None:
     called = 0
 

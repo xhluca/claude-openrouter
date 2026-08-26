@@ -135,15 +135,24 @@ def _masked_input(prompt: str) -> str:
         termios.tcsetattr(descriptor, termios.TCSADRAIN, original)
 
 
-def _read_key(*, from_stdin: bool, keep_existing: bool) -> str:
-    existing = _existing_key() if keep_existing else None
+def _confirm_key_reuse(path: Path) -> bool:
+    while True:
+        answer = input(f"Reuse the OpenRouter API key at {path}? [Y/n]: ").strip().casefold()
+        if answer in {"", "y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        print("Enter y or n.", file=sys.stderr)
+
+
+def _read_key(*, from_stdin: bool) -> str:
     if from_stdin:
         key = sys.stdin.readline().strip()
     else:
-        suffix = f" [Enter keeps …{existing[-4:]}]" if existing else ""
-        key = _masked_input(f"OpenRouter API key{suffix}: ").strip()
-    if not key and existing:
-        return existing
+        existing = _existing_key()
+        if existing and _confirm_key_reuse(credential_path()):
+            return existing
+        key = _masked_input("OpenRouter API key: ").strip()
     validate_key_shape(key)
     return key
 
@@ -210,7 +219,7 @@ def command_search(queries: list[str], *, regex: bool, as_json: bool) -> int:
 
 
 def command_setup(*, key_stdin: bool, no_validate: bool, ids: list[str] | None) -> int:
-    key = _read_key(from_stdin=key_stdin, keep_existing=True)
+    key = _read_key(from_stdin=key_stdin)
     if not no_validate:
         validate_key(key)
     models = refresh_catalog(key)
@@ -252,7 +261,7 @@ def command_select(
 
 
 def command_config(*, key_stdin: bool, no_validate: bool) -> int:
-    key = _read_key(from_stdin=key_stdin, keep_existing=False)
+    key = _read_key(from_stdin=key_stdin)
     if not no_validate:
         validate_key(key)
     models = refresh_catalog(key)

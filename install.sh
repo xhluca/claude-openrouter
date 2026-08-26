@@ -4,10 +4,10 @@
 set -eu
 
 package_name="claude-openrouter"
-package_version="0.1.2"
+package_version="0.1.3"
 wheel_name="claude_openrouter-${package_version}-py3-none-any.whl"
 # Filled from the release artifact by scripts/build-release.sh.
-wheel_sha256="ada8ba6108bd411fd54bc39ec28659191b2c2c4e2d32f0e8fbab6e555682fb34"
+wheel_sha256="7e98b4c06c87c7565d9974bddf1e4f9e0955a0d2149c63e64083ff89e0e5630f"
 pypi_index_url="${CLAUDE_OPENROUTER_PYPI_INDEX_URL:-https://pypi.org/simple}"
 release_base_url="${CLAUDE_OPENROUTER_INSTALL_BASE_URL:-https://xhluca.github.io/claude-openrouter/releases/${package_version}}"
 package_spec="${package_name}==${package_version}"
@@ -31,7 +31,7 @@ Options:
   -h, --help            Show this help.
 
 The installer never accepts an API key as a command-line argument. Guided setup
-uses a hidden terminal prompt and stores the key in a mode-0600 credential file.
+uses a masked terminal prompt and stores the key in a mode-0600 credential file.
 EOF
 }
 
