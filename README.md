@@ -20,7 +20,7 @@ background service, or replacement harness.
 ## Install
 
 ```bash
-curl -LsSf https://xhluca.github.io/claude-openrouter/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/xhluca/claude-openrouter/main/install.sh | sh
 ```
 
 The installer prompts for your OpenRouter key without echoing it, fetches the

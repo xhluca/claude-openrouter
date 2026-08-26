@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-openrouter"
-version = "0.1.0"
+version = "0.1.1"
 description = "Select OpenRouter models directly inside Claude Code"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,10 +28,10 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://xhluca.github.io/claude-openrouter/"
+Homepage = "https://github.com/xhluca/claude-openrouter"
 Repository = "https://github.com/xhluca/claude-openrouter"
 Issues = "https://github.com/xhluca/claude-openrouter/issues"
-Installer = "https://xhluca.github.io/claude-openrouter/install.sh"
+Installer = "https://raw.githubusercontent.com/xhluca/claude-openrouter/main/install.sh"
 
 [project.scripts]
 claude-openrouter = "claude_openrouter.cli:main"
@@ -49,4 +49,3 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-
