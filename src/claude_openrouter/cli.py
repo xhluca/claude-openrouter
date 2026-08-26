@@ -1,0 +1,262 @@
+"""Command-line interface for Claude OpenRouter."""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from . import __version__
+from .models import exact_models, print_models, search_models
+from .openrouter import (
+    read_credential,
+    refresh_catalog,
+    validate_key,
+    validate_key_shape,
+    write_credential,
+)
+from .paths import catalog_path, claude_settings_path, credential_path
+from .picker import choose_models
+from .settings import (
+    assert_private_files,
+    configure_claude,
+    favorite_ids,
+    reset_integration,
+)
+from .uninstall import remove_installed_package
+
+MINIMUM_CLAUDE_VERSION = (2, 1, 242)
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(
+        prog="claude-openrouter",
+        description="Connect Claude Code directly to selected OpenRouter models.",
+    )
+    root.add_argument("--version", action="version", version=__version__)
+    commands = root.add_subparsers(dest="command", required=True)
+
+    index = commands.add_parser(
+        "index",
+        aliases=["fetch"],
+        help="fetch and cache the current OpenRouter model catalog",
+    )
+    index.add_argument("--json", action="store_true", help="print the catalog as JSON")
+
+    search = commands.add_parser("search", help="refresh and search the model catalog")
+    search.add_argument("queries", nargs="+", help="glob patterns or plain terms (OR matching)")
+    search.add_argument("--regex", action="store_true", help="interpret each query as a regex")
+    search.add_argument("--json", action="store_true", help="print matches as JSON")
+
+    setup = commands.add_parser("setup", help="configure the key and Claude Code again")
+    setup.add_argument("--key-stdin", action="store_true", help="read the key from stdin")
+    setup.add_argument("--no-validate", action="store_true", help="skip the key metadata check")
+    setup.add_argument(
+        "--models",
+        nargs="+",
+        metavar="MODEL",
+        help="skip the picker and select these exact model IDs",
+    )
+
+    select = commands.add_parser("select", help="replace the saved /model favorites")
+    select.add_argument("model", nargs="?", help="exact model ID (same as --model)")
+    choice = select.add_mutually_exclusive_group()
+    choice.add_argument("--model", dest="model_option", help="select one exact model ID")
+    choice.add_argument("--models", nargs="+", metavar="MODEL", help="select exact model IDs")
+
+    config = commands.add_parser("config", help="change the stored OpenRouter API key")
+    config.add_argument("--key-stdin", action="store_true", help="read the key from stdin")
+    config.add_argument("--no-validate", action="store_true", help="skip the key metadata check")
+
+    commands.add_parser("reset", help="restore Claude Code's original settings and remove data")
+    commands.add_parser("uninstall", help="reset the integration and uninstall this tool")
+    return root
+
+
+def _existing_key() -> str | None:
+    try:
+        return read_credential()
+    except RuntimeError:
+        return None
+
+
+def _read_key(*, from_stdin: bool, keep_existing: bool) -> str:
+    existing = _existing_key() if keep_existing else None
+    if from_stdin:
+        key = sys.stdin.readline().strip()
+    else:
+        suffix = f" [Enter keeps …{existing[-4:]}]" if existing else ""
+        key = getpass.getpass(f"OpenRouter API key{suffix}: ").strip()
+    if not key and existing:
+        return existing
+    validate_key_shape(key)
+    return key
+
+
+def _claude_version() -> tuple[int, ...] | None:
+    executable = shutil.which("claude")
+    if not executable:
+        candidate = Path.home() / ".local" / "bin" / "claude"
+        executable = str(candidate) if candidate.is_file() else None
+    if not executable:
+        return None
+    result = subprocess.run(
+        [executable, "--version"], check=False, capture_output=True, text=True, timeout=10
+    )
+    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", result.stdout)
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def _warn_claude_compatibility() -> None:
+    version = _claude_version()
+    required = ".".join(str(part) for part in MINIMUM_CLAUDE_VERSION)
+    if version is None:
+        print(
+            f"warning: Claude Code was not found; install version {required}+ before use",
+            file=sys.stderr,
+        )
+    elif version < MINIMUM_CLAUDE_VERSION:
+        actual = ".".join(str(part) for part in version)
+        print(
+            f"warning: Claude Code {actual} is too old for multi-model /model favorites; "
+            f"upgrade to {required}+",
+            file=sys.stderr,
+        )
+
+
+def _choose_or_validate(
+    models: list[dict[str, Any]], requested: list[str] | None
+) -> list[dict[str, Any]]:
+    if requested is not None:
+        return exact_models(models, requested)
+    chosen = choose_models(models, favorite_ids())
+    if chosen is None:
+        raise RuntimeError("selection cancelled")
+    return exact_models(models, chosen)
+
+
+def command_index(*, as_json: bool) -> int:
+    models = refresh_catalog()
+    print_models(models, as_json=as_json)
+    if not as_json:
+        print(f"\nIndexed {len(models)} models in {catalog_path()}.", file=sys.stderr)
+    return 0
+
+
+def command_search(queries: list[str], *, regex: bool, as_json: bool) -> int:
+    models = refresh_catalog()
+    matches = search_models(models, queries, regex=regex)
+    print_models(matches, as_json=as_json)
+    print(
+        f"Refreshed {len(models)} models; {len(matches)} matched.",
+        file=sys.stderr,
+    )
+    return 0 if matches else 1
+
+
+def command_setup(*, key_stdin: bool, no_validate: bool, ids: list[str] | None) -> int:
+    key = _read_key(from_stdin=key_stdin, keep_existing=True)
+    if not no_validate:
+        validate_key(key)
+    models = refresh_catalog(key)
+    selected = _choose_or_validate(models, ids)
+    write_credential(key)
+    settings = configure_claude(selected)
+    assert_private_files()
+    _warn_claude_compatibility()
+    print(f"OpenRouter credential: {credential_path()} (mode 0600)")
+    print(f"Model index: {catalog_path()} ({len(models)} models)")
+    print(f"Claude Code settings: {settings}")
+    print("Favorites:")
+    for model in selected:
+        print(f"  - {model['id']}")
+    print("\nRestart Claude Code, then use /model to switch favorites.")
+    return 0
+
+
+def command_select(
+    positional: str | None, model_option: str | None, models_option: list[str] | None
+) -> int:
+    if positional and (model_option or models_option):
+        raise ValueError("use a positional model, --model, or --models, not more than one")
+    requested: list[str] | None
+    if positional:
+        requested = [positional]
+    elif model_option:
+        requested = [model_option]
+    else:
+        requested = models_option
+    models = refresh_catalog()
+    selected = _choose_or_validate(models, requested)
+    settings = configure_claude(selected)
+    assert_private_files()
+    print(f"Saved {len(selected)} /model favorite(s) to {settings}:")
+    for model in selected:
+        print(f"  - {model['id']}")
+    return 0
+
+
+def command_config(*, key_stdin: bool, no_validate: bool) -> int:
+    key = _read_key(from_stdin=key_stdin, keep_existing=False)
+    if not no_validate:
+        validate_key(key)
+    models = refresh_catalog(key)
+    write_credential(key)
+    print(f"OpenRouter credential updated: {credential_path()} (mode 0600)")
+    print(f"Model index refreshed: {len(models)} models")
+    return 0
+
+
+def command_reset() -> int:
+    restored = reset_integration()
+    if restored:
+        print(f"Restored Claude Code settings at {claude_settings_path()}.")
+    else:
+        print("Claude Code settings did not need restoring.")
+    print("Removed the OpenRouter credential, favorites, index, and integration state.")
+    return 0
+
+
+def command_uninstall() -> int:
+    command_reset()
+    if remove_installed_package():
+        print("Uninstalled claude-openrouter.")
+    else:
+        print(
+            "Integration reset, but this install is not managed by uv or the curl installer. "
+            "Remove claude-openrouter with the package manager that installed it.",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        if args.command in {"index", "fetch"}:
+            return command_index(as_json=args.json)
+        if args.command == "search":
+            return command_search(args.queries, regex=args.regex, as_json=args.json)
+        if args.command == "setup":
+            return command_setup(
+                key_stdin=args.key_stdin,
+                no_validate=args.no_validate,
+                ids=args.models,
+            )
+        if args.command == "select":
+            return command_select(args.model, args.model_option, args.models)
+        if args.command == "config":
+            return command_config(key_stdin=args.key_stdin, no_validate=args.no_validate)
+        if args.command == "reset":
+            return command_reset()
+        if args.command == "uninstall":
+            return command_uninstall()
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 2

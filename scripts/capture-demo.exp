@@ -1,0 +1,45 @@
+#!/usr/bin/expect -f
+# Drive the real CLI and Claude Code TUI. The demo key is intentionally fake;
+# OpenRouter's public model catalog does not consume credits.
+
+set timeout 45
+set prompt "demo ❯ "
+set env(PS1) $prompt
+
+spawn -noecho bash --noprofile --norc
+expect -exact $prompt
+
+send -- "clor setup --no-validate\r"
+expect -exact "OpenRouter API key: "
+send -- "$env(CLOR_DEMO_KEY)\r"
+
+# Curses search mode: query, browse, toggle. Repeat for a second favorite.
+after 1200
+send -- "claude-sonnet-4.6\r"
+after 900
+send -- "\r"
+after 500
+send -- "/"
+after 500
+send -- "gemini-3.1-pro-preview\r"
+after 900
+send -- "\r"
+after 500
+send -- "s"
+expect -exact "Restart Claude Code, then use /model to switch favorites."
+expect -exact $prompt
+
+after 700
+send -- "clor search 'anthropic/*sonnet*'\r"
+expect -re {Refreshed [0-9]+ models; [0-9]+ matched\.}
+expect -exact $prompt
+
+after 900
+send -- "claude --bare\r"
+expect -re {manual mode on}
+after 1400
+send -- "/model\r"
+expect -re {Select model}
+after 4500
+close
+wait
