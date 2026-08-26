@@ -17,11 +17,11 @@ done
 agg \
   --theme monokai \
   --font-size 15 \
-  --speed 1.25 \
-  --idle-time-limit 2 \
+  --speed 1 \
+  --idle-time-limit 3 \
   --last-frame-duration 4 \
-  --cols 100 \
-  --rows 34 \
+  --cols 110 \
+  --rows 38 \
   "$asset_dir/demo.cast" \
   "$asset_dir/demo.gif"
 
@@ -33,4 +33,3 @@ ffmpeg -hide_banner -loglevel error -y \
   "$asset_dir/demo.mp4"
 
 echo "Rendered $asset_dir/demo.gif and $asset_dir/demo.mp4"
-

@@ -1,45 +1,69 @@
 #!/usr/bin/expect -f
-# Drive the real CLI and Claude Code TUI. The demo key is intentionally fake;
-# OpenRouter's public model catalog does not consume credits.
+# Drive the public installer, the real CLI, and a live Claude Code session.
 
-set timeout 45
+set timeout 180
 set prompt "demo ❯ "
 set env(PS1) $prompt
+
+proc type_text {value {delay 24}} {
+    foreach character [split $value ""] {
+        send -- $character
+        after $delay
+    }
+}
+
+proc run_command {value} {
+    type_text $value 18
+    send -- "\r"
+}
+
+set key_handle [open $env(CLOR_DEMO_KEY_FILE) r]
+set demo_key [string trim [read $key_handle]]
+close $key_handle
 
 spawn -noecho bash --noprofile --norc
 expect -exact $prompt
 
-send -- "clor setup --no-validate\r"
-expect -exact "OpenRouter API key: "
-send -- "$env(CLOR_DEMO_KEY)\r"
-
-# Curses search mode: query, browse, toggle. Repeat for a second favorite.
-after 1200
-send -- "claude-sonnet-4.6\r"
-after 900
-send -- "\r"
-after 500
-send -- "/"
-after 500
-send -- "gemini-3.1-pro-preview\r"
-after 900
-send -- "\r"
-after 500
-send -- "s"
-expect -exact "Restart Claude Code, then use /model to switch favorites."
+after 1600
+run_command "curl -LsSf $env(CLOR_DEMO_INSTALL_URL) | sh -s -- --install-only"
+expect -exact "Installation complete."
 expect -exact $prompt
 
-after 700
-send -- "clor search 'anthropic/*sonnet*'\r"
+after 1800
+run_command "clor config"
+expect -exact "OpenRouter API key: "
+type_text $demo_key 45
+send -- "\r"
+unset demo_key
+expect -exact "OpenRouter credential updated:"
+expect -exact $prompt
+
+after 1800
+run_command "clor search glm-5.3-flash"
 expect -re {Refreshed [0-9]+ models; [0-9]+ matched\.}
 expect -exact $prompt
 
-after 900
-send -- "claude --bare\r"
+after 1800
+run_command "clor select z-ai/glm-5.3-flash"
+expect -exact "Saved 1 /model favorite"
+expect -exact "  - z-ai/glm-5.3-flash"
+expect -exact $prompt
+
+after 2000
+run_command "claude"
 expect -re {manual mode on}
-after 1400
-send -- "/model\r"
+after 2000
+type_text "/model" 90
+send -- "\r"
 expect -re {Select model}
-after 4500
+after 2000
+send -- "\r"
+
+after 1800
+type_text "Hello! Reply with exactly: Hello from GLM-5.3-Flash." 42
+send -- "\r"
+expect -exact "Hello! Reply with exactly: Hello from GLM-5.3-Flash."
+expect -exact "Hello from GLM-5.3-Flash."
+after 3500
 close
 wait

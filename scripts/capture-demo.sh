@@ -19,34 +19,76 @@ for command_name in asciinema claude expect uv; do
 done
 
 mkdir -p "$asset_dir"
-uv sync --quiet --directory "$repo_dir"
-
-export PATH="$repo_dir/.venv/bin:$PATH"
+export UV_TOOL_DIR="$demo_root/.local/share/uv/tools"
+export UV_TOOL_BIN_DIR="$demo_root/.local/bin"
+export PATH="$UV_TOOL_BIN_DIR:$PATH"
 export TERM="xterm-256color"
+export COLORTERM="truecolor"
+export FORCE_COLOR="3"
 export XDG_CONFIG_HOME="$demo_root/.config"
 export XDG_CACHE_HOME="$demo_root/.cache"
 export XDG_STATE_HOME="$demo_root/.local/state"
+export XDG_DATA_HOME="$demo_root/.local/share"
 export CLAUDE_CONFIG_DIR="$demo_root/.claude"
-export CLOR_DEMO_KEY="sk-or-v1-public-catalog-demo-not-a-secret"
+export CLOR_DEMO_INSTALL_URL="${CLOR_DEMO_INSTALL_URL:-https://xhluca.github.io/claude-openrouter/install.sh}"
 unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
+
+key_source="${CLOR_DEMO_KEY_FILE:-}"
+default_credential="${HOME}/.config/claude-openrouter/credential"
+demo_key_file="$demo_root/openrouter-key"
+if [[ -n "$key_source" && -s "$key_source" ]]; then
+  install -m 600 "$key_source" "$demo_key_file"
+elif [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+  umask 077
+  printf '%s\n' "$OPENROUTER_API_KEY" > "$demo_key_file"
+elif [[ -s "$default_credential" ]]; then
+  install -m 600 "$default_credential" "$demo_key_file"
+else
+  echo "a funded OpenRouter key is required for the live Claude response" >&2
+  echo "set OPENROUTER_API_KEY or CLOR_DEMO_KEY_FILE, then rerun this script" >&2
+  exit 2
+fi
+grep -Eq '^sk-or-[^[:space:]]{10,}$' "$demo_key_file" || {
+  echo "the demo OpenRouter key has an unexpected format" >&2
+  exit 2
+}
+unset OPENROUTER_API_KEY
+export CLOR_DEMO_KEY_FILE="$demo_key_file"
 
 python3 "$script_dir/prepare-demo.py" "$CLAUDE_CONFIG_DIR" "$repo_dir"
 
 asciinema rec \
   --quiet \
   --overwrite \
-  --cols 100 \
-  --rows 34 \
+  --cols 110 \
+  --rows 38 \
   --idle-time-limit 3 \
-  --title "Claude OpenRouter — real CLI and Claude Code /model picker" \
+  --title "Claude OpenRouter — curl install to live GLM-5.3-Flash response" \
   --command "$script_dir/capture-demo.exp" \
   "$asset_dir/demo.cast"
 
-python3 "$script_dir/sanitize-demo-cast.py" "$asset_dir/demo.cast"
+python3 "$script_dir/sanitize-demo-cast.py" \
+  "$asset_dir/demo.cast" \
+  --secret-file "$demo_key_file"
+python3 "$script_dir/verify-demo-session.py" \
+  "$CLAUDE_CONFIG_DIR" \
+  "Hello from GLM-5.3-Flash."
 
 if grep -Eq 'sk-or-[A-Za-z0-9_-]+' "$asset_dir/demo.cast"; then
   echo "refusing to publish a cast containing a key-shaped string" >&2
   exit 1
 fi
+
+for required_text in \
+  'curl -LsSf https://xhluca.github.io/claude-openrouter/install.sh' \
+  'clor search glm-5.3-flash' \
+  'clor select z-ai/glm-5.3-flash' \
+  'z-ai/glm-5.3-flash' \
+  'Hello from GLM-5.3-Flash.'; do
+  grep -Fq "$required_text" "$asset_dir/demo.cast" || {
+    echo "demo cast is missing: $required_text" >&2
+    exit 1
+  }
+done
 
 echo "Captured $asset_dir/demo.cast"

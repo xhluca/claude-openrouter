@@ -12,6 +12,12 @@ def test_fetch_alias_parses() -> None:
     assert cli.parser().parse_args(["fetch"]).command == "fetch"
 
 
+def test_masked_input_falls_back_for_non_terminal(monkeypatch) -> None:
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: f"{prompt}secret")
+    assert cli._masked_input("Key: ") == "Key: secret"
+
+
 def test_search_always_refreshes(sample_models, monkeypatch, capsys) -> None:
     called = 0
 
@@ -66,4 +72,3 @@ def test_select_rejects_ambiguous_arguments(isolated_home, sample_models, monkey
     write_credential(KEY)
     monkeypatch.setattr(cli, "refresh_catalog", lambda _key=None: sample_models)
     assert cli.main(["select", "qwen/qwen3-coder", "--model", "other/model"]) == 1
-

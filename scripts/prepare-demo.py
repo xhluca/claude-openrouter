@@ -38,9 +38,16 @@ def main() -> int:
     path = config_dir / ".claude.json"
     path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     path.chmod(0o600)
+    settings = {
+        "autoUpdates": False,
+        "effortLevel": "low",
+        "theme": "dark",
+    }
+    settings_path = config_dir / "settings.json"
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    settings_path.chmod(0o600)
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

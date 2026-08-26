@@ -141,13 +141,13 @@ clor uninstall
 
 ## Demo
 
-The animation above is rendered from a real asciinema capture of the installed
-CLI and the native Claude Code TUI: hidden key entry, live catalog indexing,
-glob search, interactive multi-selection, and the resulting `/model` rows. It
-uses a deliberately fake credential only to read OpenRouter's public catalog;
-it makes no inference request. The prompt is not echoed, and the scripts reject
-any cast containing a key-shaped string before publishing it. The only
-post-processing replaces the randomized temporary home path with `~`.
+The animation above is rendered in real time from an end-to-end asciinema
+capture: the public curl installer, progressively masked key entry, a live
+OpenRouter search for `z-ai/glm-5.3-flash`, exact selection, Claude Code's
+native `/model` picker, and a real model response. The scripts verify the saved
+assistant turn and reject any cast containing the credential before publishing
+it. The only textual post-processing replaces the randomized temporary demo
+path with `~`.
 
 [Watch the MP4](https://github.com/xhluca/claude-openrouter/raw/main/docs/assets/demo.mp4)
 or [reproduce the capture](scripts/render-demo.sh).

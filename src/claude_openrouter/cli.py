@@ -85,13 +85,63 @@ def _existing_key() -> str | None:
         return None
 
 
+def _masked_input(prompt: str) -> str:
+    """Read a secret from a terminal while showing one mask per character."""
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        return getpass.getpass(prompt)
+
+    try:
+        import termios
+    except ImportError:
+        return getpass.getpass(prompt)
+
+    descriptor = sys.stdin.fileno()
+    original = termios.tcgetattr(descriptor)
+    masked = original.copy()
+    masked[6] = original[6].copy()
+    masked[3] &= ~(termios.ECHO | termios.ICANON)
+    masked[6][termios.VMIN] = 1
+    masked[6][termios.VTIME] = 0
+    characters: list[str] = []
+    sys.stderr.write(prompt)
+    sys.stderr.flush()
+    try:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, masked)
+        while True:
+            character = sys.stdin.read(1)
+            if character in {"\n", "\r"}:
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+                return "".join(characters)
+            if character in {"\b", "\x7f"}:
+                if characters:
+                    characters.pop()
+                    sys.stderr.write("\b \b")
+                    sys.stderr.flush()
+                continue
+            if character == "\x04":
+                if not characters:
+                    raise EOFError
+                continue
+            if character.isprintable():
+                characters.append(character)
+                sys.stderr.write("*")
+                sys.stderr.flush()
+    except BaseException:
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+        raise
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, original)
+
+
 def _read_key(*, from_stdin: bool, keep_existing: bool) -> str:
     existing = _existing_key() if keep_existing else None
     if from_stdin:
         key = sys.stdin.readline().strip()
     else:
         suffix = f" [Enter keeps …{existing[-4:]}]" if existing else ""
-        key = getpass.getpass(f"OpenRouter API key{suffix}: ").strip()
+        key = _masked_input(f"OpenRouter API key{suffix}: ").strip()
     if not key and existing:
         return existing
     validate_key_shape(key)
