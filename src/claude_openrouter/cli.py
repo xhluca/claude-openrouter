@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import re
 import shutil
 import subprocess
@@ -32,6 +33,20 @@ from .uninstall import remove_installed_package
 from .update import update_installed_package
 
 MINIMUM_CLAUDE_VERSION = (2, 1, 242)
+
+
+def _supports_color(stream: Any) -> bool:
+    return (
+        "NO_COLOR" not in os.environ
+        and os.environ.get("TERM") != "dumb"
+        and bool(getattr(stream, "isatty", lambda: False)())
+    )
+
+
+def _styled(value: object, code: str, *, stream: Any | None = None) -> str:
+    target = sys.stdout if stream is None else stream
+    text = str(value)
+    return f"\x1b[{code}m{text}\x1b[0m" if _supports_color(target) else text
 
 
 def parser() -> argparse.ArgumentParser:
@@ -234,13 +249,26 @@ def command_setup(*, key_stdin: bool, no_validate: bool, ids: list[str] | None) 
     settings = configure_claude(selected)
     assert_private_files()
     _warn_claude_compatibility()
-    print(f"OpenRouter credential: {credential_path()} (mode 0600)")
-    print(f"Model index: {catalog_path()} ({len(models)} models)")
-    print(f"Claude Code settings: {settings}")
-    print("Favorites:")
+    print(_styled("✓ Claude OpenRouter is ready", "1;32"))
+    print()
+    print(
+        f"{_styled('OpenRouter credential:', '1;36')} "
+        f"{_styled(credential_path(), '36')} {_styled('(mode 0600)', '2')}"
+    )
+    print(
+        f"{_styled('Model index:', '1;36')} "
+        f"{_styled(catalog_path(), '36')} {_styled(f'({len(models)} models)', '2')}"
+    )
+    print(f"{_styled('Claude Code settings:', '1;36')} {_styled(settings, '36')}")
+    print()
+    print(_styled("Favorites:", "1;35"))
     for model in selected:
-        print(f"  - {model['id']}")
-    print("\nRestart Claude Code, then use /model to switch favorites.")
+        print(f"  {_styled('●', '1;32')} {_styled(model['id'], '1;36')}")
+    print()
+    print(
+        f"{_styled('Next:', '1;33')} restart Claude Code, then use "
+        f"{_styled('/model', '1;35')} to switch favorites."
+    )
     return 0
 
 
@@ -260,9 +288,14 @@ def command_select(
     selected = _choose_or_validate(models, requested)
     settings = configure_claude(selected)
     assert_private_files()
-    print(f"Saved {len(selected)} /model favorite(s) to {settings}:")
+    print(
+        _styled(
+            f"✓ Saved {len(selected)} /model favorite(s) to {settings}:",
+            "1;32",
+        )
+    )
     for model in selected:
-        print(f"  - {model['id']}")
+        print(_styled(f"  - {model['id']}", "1;36"))
     return 0
 
 

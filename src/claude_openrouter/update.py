@@ -92,6 +92,8 @@ def _upgrade_command() -> list[str]:
                 "tool",
                 "install",
                 "--force",
+                "--link-mode",
+                "copy",
                 "--refresh-package",
                 PACKAGE_NAME,
                 "--default-index",

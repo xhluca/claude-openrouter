@@ -86,7 +86,8 @@ clor select
 The positional value is shorthand for `--model`. Each non-interactive call
 replaces the saved favorite set. In the picker, type a search and press Down or
 Enter to browse its results. Press Enter or Space to select and deselect; press
-Up past the first result or Esc to focus the search again; press `s` to save.
+Up past the first result or Esc to focus the search again. Press `s` while
+browsing results, or `Shift-S`/`Ctrl-S` while typing a search, to save.
 
 Restart Claude Code, then switch normally:
 

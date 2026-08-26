@@ -18,6 +18,8 @@ def test_uv_tool_update_reinstalls_latest_unpinned_release(tmp_path, monkeypatch
         "tool",
         "install",
         "--force",
+        "--link-mode",
+        "copy",
         "--refresh-package",
         update.PACKAGE_NAME,
         "--default-index",

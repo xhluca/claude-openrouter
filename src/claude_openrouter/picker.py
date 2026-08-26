@@ -3,10 +3,68 @@
 from __future__ import annotations
 
 import curses
+import os
 import sys
+from contextlib import suppress
 from typing import Any
 
 from .models import top_matches
+
+PAIR_TITLE = 1
+PAIR_ACCENT = 2
+PAIR_SUCCESS = 3
+PAIR_QUERY = 4
+PAIR_CURSOR = 5
+_COLORS_ENABLED = False
+
+
+def _init_colors() -> None:
+    global _COLORS_ENABLED
+    _COLORS_ENABLED = False
+    if "NO_COLOR" in os.environ or os.environ.get("TERM") == "dumb":
+        return
+    try:
+        curses.start_color()
+        if not curses.has_colors():
+            return
+        background = -1
+        try:
+            curses.use_default_colors()
+        except curses.error:
+            background = curses.COLOR_BLACK
+        curses.init_pair(PAIR_TITLE, curses.COLOR_MAGENTA, background)
+        curses.init_pair(PAIR_ACCENT, curses.COLOR_CYAN, background)
+        curses.init_pair(PAIR_SUCCESS, curses.COLOR_GREEN, background)
+        curses.init_pair(PAIR_QUERY, curses.COLOR_YELLOW, background)
+        curses.init_pair(PAIR_CURSOR, curses.COLOR_BLACK, curses.COLOR_CYAN)
+    except curses.error:
+        return
+    _COLORS_ENABLED = True
+
+
+def _style(pair: int, attributes: int = curses.A_NORMAL) -> int:
+    return attributes | (curses.color_pair(pair) if _COLORS_ENABLED else 0)
+
+
+def _add_segments(
+    screen: Any,
+    row: int,
+    width: int,
+    segments: list[tuple[str, int]],
+) -> None:
+    column = 0
+    limit = max(1, width - 1)
+    for value, style in segments:
+        remaining = limit - column
+        if remaining <= 0:
+            break
+        screen.addnstr(row, column, value, remaining, style)
+        column += min(len(value), remaining)
+
+
+def _set_cursor(visible: bool) -> None:
+    with suppress(curses.error):
+        curses.curs_set(1 if visible else 0)
 
 
 def _ordered_toggle(selected: list[str], model_id: str) -> None:
@@ -27,15 +85,24 @@ def _draw(
     screen.erase()
     height, width = screen.getmaxyx()
     title = "Claude OpenRouter — choose /model favorites"
-    screen.addnstr(0, 0, title, max(1, width - 1), curses.A_BOLD)
+    screen.addnstr(0, 0, title, max(1, width - 1), _style(PAIR_TITLE, curses.A_BOLD))
     prompt = f"Search: {query}"
-    screen.addnstr(2, 0, prompt, max(1, width - 1))
+    _add_segments(
+        screen,
+        2,
+        width,
+        [
+            ("Search: ", _style(PAIR_ACCENT, curses.A_BOLD)),
+            (query, _style(PAIR_QUERY, curses.A_BOLD)),
+        ],
+    )
     if search_mode:
         screen.addnstr(
             3,
             0,
-            "Type to filter · ↓/Enter browse · Ctrl-C cancel",
+            "Type to filter · ↓/Enter browse · Ctrl-S/Shift-S save · Ctrl-C cancel",
             width - 1,
+            _style(PAIR_ACCENT, curses.A_DIM),
         )
     else:
         screen.addnstr(
@@ -43,8 +110,17 @@ def _draw(
             0,
             "↑/↓ move · Enter/Space select · Esc search · s save · q cancel",
             width - 1,
+            _style(PAIR_ACCENT, curses.A_DIM),
         )
-    screen.addnstr(4, 0, f"Selected: {len(selected)}", width - 1, curses.A_BOLD)
+    _add_segments(
+        screen,
+        4,
+        width,
+        [
+            ("Selected: ", _style(PAIR_ACCENT, curses.A_BOLD)),
+            (str(len(selected)), _style(PAIR_SUCCESS, curses.A_BOLD)),
+        ],
+    )
     available_rows = max(1, height - 6)
     start = max(0, cursor - available_rows + 1)
     for row_index, model in enumerate(models[start : start + available_rows], start=5):
@@ -53,19 +129,41 @@ def _draw(
         mark = "●" if model_id in selected else "○"
         name = model.get("name")
         suffix = f" — {name}" if isinstance(name, str) and name != model_id else ""
-        style = curses.A_REVERSE if not search_mode and absolute == cursor else curses.A_NORMAL
-        screen.addnstr(row_index, 0, f"{mark} {model_id}{suffix}", width - 1, style)
+        if not search_mode and absolute == cursor:
+            screen.addnstr(
+                row_index,
+                0,
+                f"{mark} {model_id}{suffix}",
+                width - 1,
+                _style(PAIR_CURSOR, curses.A_BOLD),
+            )
+        else:
+            mark_style = _style(
+                PAIR_SUCCESS if model_id in selected else PAIR_ACCENT,
+                curses.A_BOLD if model_id in selected else curses.A_DIM,
+            )
+            _add_segments(
+                screen,
+                row_index,
+                width,
+                [
+                    (f"{mark} ", mark_style),
+                    (model_id, _style(PAIR_ACCENT, curses.A_BOLD)),
+                    (suffix, curses.A_DIM),
+                ],
+            )
     if search_mode:
         screen.move(2, min(width - 1, len(prompt)))
-        curses.curs_set(1)
+        _set_cursor(True)
     else:
-        curses.curs_set(0)
+        _set_cursor(False)
     screen.refresh()
 
 
 def _curses_picker(models: list[dict[str, Any]], initial: list[str]) -> list[str] | None:
     def run(screen: Any) -> list[str] | None:
-        curses.use_default_colors()
+        _init_colors()
+        curses.raw()
         screen.keypad(True)
         selected = [model_id for model_id in initial if any(m["id"] == model_id for m in models)]
         query = ""
@@ -76,7 +174,11 @@ def _curses_picker(models: list[dict[str, Any]], initial: list[str]) -> list[str
             _draw(screen, results, query, cursor, selected, search_mode)
             key = screen.get_wch()
             if search_mode:
-                if key in ("\n", "\r", curses.KEY_ENTER, curses.KEY_DOWN):
+                if key in ("\x13", "S"):
+                    if selected:
+                        return selected
+                    curses.beep()
+                elif key in ("\n", "\r", curses.KEY_ENTER, curses.KEY_DOWN):
                     if results:
                         search_mode = False
                         cursor = 0

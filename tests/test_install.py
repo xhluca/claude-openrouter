@@ -21,6 +21,14 @@ def test_installer_help_does_not_require_network() -> None:
     assert "--install-only" in result.stdout
 
 
+def test_uv_installs_use_copy_mode_to_avoid_cross_filesystem_warnings() -> None:
+    installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+    commands = [line.strip() for line in installer.splitlines() if "uv tool install" in line]
+
+    assert commands
+    assert all("--link-mode copy" in command for command in commands)
+
+
 def test_readme_keeps_acknowledgements_at_bottom() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert readme.rstrip().endswith("management spectrum.")

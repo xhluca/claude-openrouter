@@ -4,10 +4,10 @@
 set -eu
 
 package_name="claude-openrouter"
-package_version="0.1.4"
+package_version="0.1.5"
 wheel_name="claude_openrouter-${package_version}-py3-none-any.whl"
 # Filled from the release artifact by scripts/build-release.sh.
-wheel_sha256="ef97aa8ef7a401aae0a91fb57fe88e6cb748994af92c65fe5b0448f0366bc06e"
+wheel_sha256="ae65a8da05a8c260f5e458043770d1d463e3867572879e622ac2e6d7d79c9271"
 pypi_index_url="${CLAUDE_OPENROUTER_PYPI_INDEX_URL:-https://pypi.org/simple}"
 release_base_url="${CLAUDE_OPENROUTER_INSTALL_BASE_URL:-https://xhluca.github.io/claude-openrouter/releases/${package_version}}"
 package_spec="${package_name}==${package_version}"
@@ -124,13 +124,13 @@ installed_command=""
 
 if command -v uv >/dev/null 2>&1; then
   if [ -n "$local_source" ]; then
-    uv tool install --force "$local_source"
+    uv tool install --force --link-mode copy "$local_source"
   elif [ -n "$wheel_path" ]; then
-    uv tool install --force "$wheel_path"
-  elif ! uv tool install --force --default-index "$pypi_index_url" "$package_spec"; then
+    uv tool install --force --link-mode copy "$wheel_path"
+  elif ! uv tool install --force --link-mode copy --default-index "$pypi_index_url" "$package_spec"; then
     printf 'PyPI installation failed; using the verified release fallback.\n' >&2
     prepare_fallback_wheel
-    uv tool install --force "$wheel_path"
+    uv tool install --force --link-mode copy "$wheel_path"
   fi
   uv_bin_dir="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
   if [ -x "$uv_bin_dir/claude-openrouter" ]; then

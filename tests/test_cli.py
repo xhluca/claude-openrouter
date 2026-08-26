@@ -8,6 +8,11 @@ from claude_openrouter.openrouter import write_credential
 KEY = "sk-or-v1-this-is-a-fake-test-key"
 
 
+class TtyBuffer(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
 def test_fetch_alias_parses() -> None:
     assert cli.parser().parse_args(["fetch"]).command == "fetch"
 
@@ -29,6 +34,17 @@ def test_masked_input_falls_back_for_non_terminal(monkeypatch) -> None:
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: f"{prompt}secret")
     assert cli._masked_input("Key: ") == "Key: secret"
+
+
+def test_terminal_styles_use_color_and_respect_no_color(monkeypatch) -> None:
+    stream = TtyBuffer()
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    assert cli._styled("ready", "1;32", stream=stream) == "\x1b[1;32mready\x1b[0m"
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert cli._styled("ready", "1;32", stream=stream) == "ready"
 
 
 def test_existing_key_is_reused_after_confirmation(isolated_home, monkeypatch, capsys) -> None:
