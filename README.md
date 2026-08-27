@@ -174,6 +174,12 @@ installation:
 clor uninstall
 ```
 
+Reset and uninstall only reverse fields managed by Claude OpenRouter in
+`~/.claude/settings.json`. They intentionally leave project-owned settings such
+as `.claude/settings.local.json` unchanged. If Claude Code reports an unsafe
+project permission after uninstalling, open `/permissions`, select the named
+local allow rule, and remove it. Do not replace it with a broader wildcard.
+
 ## Demo
 
 The animation above is rendered in real time from an end-to-end asciinema
