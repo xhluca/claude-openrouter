@@ -12,11 +12,11 @@
   <img src="https://raw.githubusercontent.com/xhluca/claude-openrouter/main/docs/assets/demo.gif" alt="Installing Claude OpenRouter, searching OpenRouter models, and adding favorites to Claude Code" width="860">
 </p>
 
-Claude OpenRouter is a small, dependency-free CLI. It indexes OpenRouter's live
-model catalog, gives you a searchable multi-select picker, and adds those
-favorites to Claude Code's native `/model` menu. There is no local proxy,
-background service, replacement harness, or alternate launcher: after setup,
-run the normal `claude` command.
+Claude OpenRouter is a small, dependency-free CLI and loopback router. It
+indexes OpenRouter's live catalog, gives you a searchable multi-select picker,
+and places those favorites beside Claude's built-in models in `/model`. Native
+Claude requests keep using Anthropic; explicitly labeled OpenRouter favorites
+use your OpenRouter key. After setup, run the normal `claude` command.
 
 ## Install
 
@@ -28,6 +28,8 @@ The installer prompts for your OpenRouter key without echoing it, fetches the
 current catalog, and opens the model picker immediately. It installs for the
 current user on Linux or macOS. If a credential already exists, setup shows its
 path and asks whether to reuse it before offering a masked replacement prompt.
+Max routing requires an existing Claude.ai login; run `claude auth login` first
+if Claude Code is newly installed.
 
 Or use `uv`:
 
@@ -52,10 +54,10 @@ Upgrade the installation in place at any time:
 clor update
 ```
 
-The updater uses the manager that owns the current installation and reports
-the installed version before and after. `clor upgrade` is an alias. When moving
-from 0.2.x to 0.3.x, run `clor setup` once after the update to activate the new
-plain-`claude` integration.
+The updater uses the manager that owns the current installation, reports the
+installed version before and after, and restarts an existing hybrid service.
+`clor upgrade` is an alias. When moving from an older direct-routing release to
+0.4.x, run `clor setup` once to activate hybrid routing.
 
 ## Quick start
 
@@ -103,15 +105,38 @@ claude
 ```
 
 The selected rows are Claude Code's native picker rows, and model requests use
-the OpenRouter key stored by this tool. Every local Claude Code entry point reads
-the same settings, including `claude --continue`, `claude --agent NAME`,
-background agents, and the `claude agents` view.
+the provider shown in the row. Every local Claude Code entry point reads the
+same settings, including `claude --continue`, `claude --agent NAME`, background
+agents, and the `claude agents` view.
 
-When you are logged in through `claude.ai`, Claude Code keeps that native
-authentication for Claude.ai connectors while a custom request header routes
-model calls to OpenRouter. The old external-auth warning is therefore absent.
-Without a native login, Claude.ai connectors are unavailable; manually
-configured MCP servers continue to work.
+| `/model` choice | Upstream | Billing credential |
+| --- | --- | --- |
+| Built-in Opus, Sonnet, or Haiku | Anthropic | Claude Max OAuth by default |
+| A row labeled `· OpenRouter` | OpenRouter | Stored OpenRouter key |
+
+The router never infers a provider from a bare third-party ID. OpenRouter rows
+use a private `clor/openrouter/` namespace, and an unknown or unfavorited model
+fails closed. Selecting Opus cannot silently send it to OpenRouter.
+
+Claude Code keeps its native Claude.ai authentication, so connectors remain
+available and the external-auth warning is absent. If you prefer direct
+Anthropic API billing for built-in Claude models, configure it separately:
+
+```bash
+clor setup --anthropic-auth api
+# or, after setup:
+clor config --anthropic-auth api
+
+# Return native Claude models to Max subscription billing:
+clor config --anthropic-auth max
+```
+
+The Anthropic API key is stored inside the router and is not exported as
+`ANTHROPIC_API_KEY`, preserving Claude's native login and connectors. `clor
+config --anthropic-key-stdin` is available for non-interactive secret input.
+Deferred tool loading is disabled because non-Anthropic OpenRouter models
+reject that Anthropic-specific protocol; connector tools remain available and
+are loaded eagerly instead. This is required for GLM in `claude agents`.
 
 ## Commands
 
@@ -123,6 +148,7 @@ configured MCP servers continue to work.
 | `clor setup` | Run the install-time key and model setup again |
 | `clor select [MODEL]` | Replace `/model` favorites exactly |
 | `clor config` | Replace and validate the stored OpenRouter key |
+| `clor doctor` | Check the service, favorites, and native Claude login |
 | `clor claude [ARGS...]` | Compatibility alias for `claude [ARGS...]` |
 | `clor update` | Install the latest release and report the version change |
 | `clor reset` | Restore the original Claude settings and delete tool data |
@@ -135,24 +161,30 @@ accepted as command-line arguments; automation can pipe one to `setup
 ## What it changes
 
 ```text
-OpenRouter API → local model index → selected favorites → Claude Code /model
+                                    ┌─ Claude model ─────► Anthropic
+Claude Code ─► 127.0.0.1 router ────┤
+                                    └─ clor/openrouter/* ► OpenRouter
 ```
 
 - Stores the key at `~/.config/claude-openrouter/credential` with mode `0600`.
-- Adds the picker, OpenRouter API base, and an Authorization header to
-  `~/.claude/settings.json`, then restricts that file to mode `0600` because it
-  contains the key.
-- With a native Claude.ai login, does not set `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_AUTH_TOKEN`, or `apiKeyHelper`, so Claude Code retains that login
-  and its connectors. Without one, it uses `ANTHROPIC_AUTH_TOKEN` as a fallback.
+- Runs a loopback-only router on `127.0.0.1:9417`, supervised by a systemd user
+  service on Linux or a LaunchAgent on macOS. Minimal containers without a
+  service manager use a detached process for the container lifetime.
+- Adds the local endpoint, a random local-service token, and OpenRouter picker
+  rows to `~/.claude/settings.json`. Provider API keys never appear there.
+- Does not set `ANTHROPIC_API_KEY` or `apiKeyHelper` when a native login exists.
+- Strips OAuth and Anthropic keys before OpenRouter requests, strips the
+  OpenRouter key before Anthropic requests, and allows only selected
+  OpenRouter model IDs.
 - Saves the fields it replaces in a private, versioned backup and restores them
   exactly with `clor reset` or `clor uninstall`.
 - Migrates settings created by older claude-openrouter releases automatically
   the next time setup or selection runs.
 
-Claude Code applies one endpoint to an entire process, not to individual
-`/model` rows. Consequently, the configured picker contains OpenRouter-routed
-favorites rather than a mixture of native-billed and OpenRouter-routed rows.
+Claude Code itself applies one endpoint and authentication context to an entire
+process. The local router supplies the missing per-model boundary while keeping
+Claude Code unmodified. If the router is unavailable or cannot classify a
+model, the request errors instead of falling back to another paid provider.
 
 Claude Code is optimized for Anthropic models. OpenRouter can accept other model
 IDs through its Anthropic-compatible endpoint, but models differ in tool use,
@@ -161,7 +193,7 @@ that OpenRouter documents as suitable for agentic tool use.
 
 ## Reset and uninstall
 
-Restore the pre-install Claude settings while keeping the command:
+Stop the router, restore the pre-install Claude settings, and keep the command:
 
 ```bash
 clor reset
@@ -201,7 +233,12 @@ git clone https://github.com/xhluca/claude-openrouter.git
 cd claude-openrouter
 uv run --with pytest pytest
 uv run --with ruff ruff check .
+scripts/live-docker-check.sh /path/to/openrouter-key ~/.claude
 ```
+
+The Docker check mounts temporary copies of Claude OAuth state and the key only
+at runtime. It makes live, billable Max and OpenRouter calls, dispatches a GLM
+5.3 Flash background agent, and launches the real `claude agents` terminal UI.
 
 ## License
 

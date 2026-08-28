@@ -3,10 +3,12 @@ from __future__ import annotations
 import io
 
 from claude_openrouter import cli
-from claude_openrouter.openrouter import write_credential
-from claude_openrouter.paths import claude_settings_path
+from claude_openrouter.openrouter import save_catalog, write_credential
+from claude_openrouter.paths import anthropic_credential_path, claude_settings_path
+from claude_openrouter.settings import load_preferences, save_preferences
 
 KEY = "sk-or-v1-this-is-a-fake-test-key"
+ANTHROPIC_KEY = "sk-ant-this-is-a-fake-test-key"
 
 
 class TtyBuffer(io.StringIO):
@@ -111,6 +113,7 @@ def test_setup_from_stdin_writes_favorites(
     monkeypatch.setattr(cli, "refresh_catalog", lambda _key=None: sample_models)
     monkeypatch.setattr(cli, "_warn_claude_compatibility", lambda: None)
     monkeypatch.setattr(cli, "has_native_login", lambda: True)
+    monkeypatch.setattr(cli, "start_service", lambda _port: "test service")
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO(f"{KEY}\n"))
 
     assert (
@@ -119,7 +122,7 @@ def test_setup_from_stdin_writes_favorites(
                 "setup",
                 "--key-stdin",
                 "--models",
-                "anthropic/claude-sonnet-4.6",
+                "google/gemini-3.1-pro-preview",
                 "qwen/qwen3-coder",
             ]
         )
@@ -136,6 +139,7 @@ def test_select_positional_maps_to_one_model(
     write_credential(KEY)
     monkeypatch.setattr(cli, "refresh_catalog", lambda _key=None: sample_models)
     monkeypatch.setattr(cli, "has_native_login", lambda: True)
+    monkeypatch.setattr(cli, "start_service", lambda _port: "test service")
     assert cli.main(["select", "google/gemini-3.1-pro-preview"]) == 0
     assert "Saved 1 /model favorite" in capsys.readouterr().out
 
@@ -153,9 +157,39 @@ def test_claude_prepares_favorites_then_launches(
     monkeypatch.setattr(cli, "favorite_ids", lambda: ["qwen/qwen3-coder"])
     monkeypatch.setattr(cli, "load_catalog", lambda: sample_models)
     monkeypatch.setattr(cli, "has_native_login", lambda: True)
+    monkeypatch.setattr(cli, "healthcheck", lambda _port: True)
     launched = []
     monkeypatch.setattr(cli, "launch_claude", launched.append)
 
     assert cli.main(["claude", "--continue"]) == 0
     assert launched == [["--continue"]]
     assert "qwen/qwen3-coder" in claude_settings_path().read_text()
+
+
+def test_config_can_switch_native_models_to_private_anthropic_api_key(
+    isolated_home, sample_models, monkeypatch
+) -> None:
+    write_credential(KEY)
+    save_catalog(sample_models)
+    save_preferences(sample_models[2:3], sample_models[2]["id"])
+    monkeypatch.setattr(cli, "has_native_login", lambda: True)
+    monkeypatch.setattr(cli, "start_service", lambda _port: "test service")
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(f"{ANTHROPIC_KEY}\n"))
+
+    assert cli.main(["config", "--anthropic-key-stdin"]) == 0
+    assert anthropic_credential_path().read_text().strip() == ANTHROPIC_KEY
+    assert load_preferences()["anthropic_auth"] == "api"
+
+
+def test_update_restarts_an_existing_hybrid_router(
+    isolated_home, sample_models, monkeypatch
+) -> None:
+    save_preferences(sample_models[2:3], sample_models[2]["id"])
+    updated: list[str] = []
+    restarted: list[int] = []
+    monkeypatch.setattr(cli, "update_installed_package", updated.append)
+    monkeypatch.setattr(cli, "start_service", lambda port: restarted.append(port) or "test")
+
+    assert cli.main(["update"]) == 0
+    assert updated == [cli.__version__]
+    assert restarted == [9417]

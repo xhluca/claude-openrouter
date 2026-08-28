@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import stat
 
+import pytest
 from conftest import write_json
 
 from claude_openrouter.openrouter import write_credential
@@ -12,12 +13,14 @@ from claude_openrouter.paths import (
     config_dir,
     helper_path,
     launch_settings_path,
+    router_token_path,
 )
 from claude_openrouter.settings import (
     BASE_URL,
     configure_claude,
     refresh_claude_credential,
     reset_integration,
+    restore_claude_settings,
     write_key_helper,
 )
 
@@ -63,6 +66,22 @@ def write_legacy_backup(original: dict, *, existed: bool = True) -> None:
     )
 
 
+def test_hybrid_configuration_blocks_anthropic_models_on_openrouter(
+    isolated_home, sample_models
+) -> None:
+    write_credential(KEY)
+    with pytest.raises(ValueError, match="keeps Anthropic models off OpenRouter"):
+        configure_claude(sample_models[:1])
+
+
+def test_restore_does_not_claim_an_unrelated_loopback_gateway(isolated_home) -> None:
+    original = {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:9999"}}
+    write_json(claude_settings_path(), original)
+
+    assert restore_claude_settings() is False
+    assert read_json(claude_settings_path()) == original
+
+
 def test_configure_makes_plain_claude_use_openrouter_and_preserves_native_auth(
     isolated_home, sample_models
 ) -> None:
@@ -82,25 +101,30 @@ def test_configure_makes_plain_claude_use_openrouter_and_preserves_native_auth(
     write_json(claude_settings_path(), original)
     write_credential(KEY)
 
-    result = configure_claude([sample_models[1], sample_models[2]])
+    result = configure_claude([sample_models[2], sample_models[3]])
 
     assert result == claude_settings_path()
     settings = read_json(claude_settings_path())
     assert settings["theme"] == "dark"
-    assert settings["model"] == "anthropic/claude-opus-4.6"
+    assert settings["model"] == "clor/openrouter/google/gemini-3.1-pro-preview"
     assert "apiKeyHelper" not in settings
     assert settings["env"] == {
         "KEEP": "yes",
         "ANTHROPIC_BASE_URL": BASE_URL,
-        "ANTHROPIC_CUSTOM_HEADERS": f"X-Trace: yes\nAuthorization: Bearer {KEY}",
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_AUTH_TOKEN": "",
+        "ANTHROPIC_CUSTOM_HEADERS": (
+            f"X-Trace: yes\nX-Claude-OpenRouter-Token: {router_token_path().read_text().strip()}"
+        ),
+        "ENABLE_TOOL_SEARCH": "false",
     }
-    assert settings["modelPicker"]["replaceBuiltInOptions"] is True
+    assert settings["modelPicker"]["replaceBuiltInOptions"] is False
     assert [row["model"] for row in settings["modelPicker"]["options"]] == [
-        "anthropic/claude-opus-4.6",
-        "google/gemini-3.1-pro-preview",
+        "clor/openrouter/google/gemini-3.1-pro-preview",
+        "clor/openrouter/qwen/qwen3-coder",
     ]
     assert stat.S_IMODE(claude_settings_path().stat().st_mode) == 0o600
-    assert read_json(backup_path())["version"] == 2
+    assert read_json(backup_path())["version"] == 3
     assert not launch_settings_path().exists()
     assert not helper_path().exists()
 
@@ -117,14 +141,16 @@ def test_reconfigure_keeps_original_backup_and_does_not_duplicate_authorization(
     }
     write_json(claude_settings_path(), original)
     write_credential(KEY)
-    configure_claude(sample_models[:2])
+    configure_claude(sample_models[2:])
     backup = backup_path().read_text()
 
     configure_claude(sample_models[2:])
 
     assert backup_path().read_text() == backup
     headers = read_json(claude_settings_path())["env"]["ANTHROPIC_CUSTOM_HEADERS"]
-    assert headers == f"X-Trace: yes\nAuthorization: Bearer {KEY}"
+    assert headers == (
+        f"X-Trace: yes\nX-Claude-OpenRouter-Token: {router_token_path().read_text().strip()}"
+    )
 
     reset_integration()
     assert read_json(claude_settings_path()) == original
@@ -134,13 +160,15 @@ def test_config_updates_the_persistent_authorization_header(
     isolated_home, sample_models
 ) -> None:
     write_credential(KEY)
-    configure_claude(sample_models[:1])
+    configure_claude(sample_models[2:3])
 
     assert refresh_claude_credential(NEW_KEY) is True
     settings = read_json(claude_settings_path())
     assert settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] == (
-        f"Authorization: Bearer {NEW_KEY}"
+        f"X-Claude-OpenRouter-Token: {router_token_path().read_text().strip()}"
     )
+    assert KEY not in settings["env"]["ANTHROPIC_CUSTOM_HEADERS"]
+    assert NEW_KEY not in settings["env"]["ANTHROPIC_CUSTOM_HEADERS"]
 
 
 def test_configure_without_native_login_uses_token_fallback(
@@ -152,14 +180,17 @@ def test_configure_without_native_login_uses_token_fallback(
     )
     write_credential(KEY)
 
-    configure_claude(sample_models[:1], native_login=False)
+    configure_claude(sample_models[2:3], native_login=False)
 
     env = read_json(claude_settings_path())["env"]
-    assert env["ANTHROPIC_AUTH_TOKEN"] == KEY
-    assert env["ANTHROPIC_CUSTOM_HEADERS"] == "X-Trace: yes"
+    token = router_token_path().read_text().strip()
+    assert env["ANTHROPIC_AUTH_TOKEN"] == token
+    assert env["ANTHROPIC_CUSTOM_HEADERS"] == (
+        f"X-Trace: yes\nX-Claude-OpenRouter-Token: {token}"
+    )
 
     assert refresh_claude_credential(NEW_KEY) is True
-    assert read_json(claude_settings_path())["env"]["ANTHROPIC_AUTH_TOKEN"] == NEW_KEY
+    assert read_json(claude_settings_path())["env"]["ANTHROPIC_AUTH_TOKEN"] == token
 
 
 def test_configure_migrates_legacy_global_settings_from_backup(
@@ -198,7 +229,7 @@ def test_configure_migrates_legacy_global_settings_from_backup(
     write_json(claude_settings_path(), legacy)
     write_credential(KEY)
 
-    configure_claude(sample_models[:2])
+    configure_claude(sample_models[2:])
 
     settings = read_json(claude_settings_path())
     assert settings["theme"] == "dark"
@@ -207,9 +238,14 @@ def test_configure_migrates_legacy_global_settings_from_backup(
         "KEEP": "yes",
         "LATER": "preserved",
         "ANTHROPIC_BASE_URL": BASE_URL,
-        "ANTHROPIC_CUSTOM_HEADERS": f"Authorization: Bearer {KEY}",
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_AUTH_TOKEN": "",
+        "ANTHROPIC_CUSTOM_HEADERS": (
+            f"X-Claude-OpenRouter-Token: {router_token_path().read_text().strip()}"
+        ),
+        "ENABLE_TOOL_SEARCH": "false",
     }
-    assert read_json(backup_path())["version"] == 2
+    assert read_json(backup_path())["version"] == 3
     assert not helper_path().exists()
 
     reset_integration()
@@ -250,14 +286,19 @@ def test_configure_cleans_recognizable_legacy_settings_without_backup(
     write_json(claude_settings_path(), legacy)
     write_credential(KEY)
 
-    configure_claude(sample_models[:1])
+    configure_claude(sample_models[2:3])
 
     settings = read_json(claude_settings_path())
     assert settings["theme"] == "dark"
     assert settings["env"] == {
         "KEEP": "yes",
         "ANTHROPIC_BASE_URL": BASE_URL,
-        "ANTHROPIC_CUSTOM_HEADERS": f"Authorization: Bearer {KEY}",
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_AUTH_TOKEN": "",
+        "ANTHROPIC_CUSTOM_HEADERS": (
+            f"X-Claude-OpenRouter-Token: {router_token_path().read_text().strip()}"
+        ),
+        "ENABLE_TOOL_SEARCH": "false",
     }
 
     reset_integration()
@@ -270,7 +311,7 @@ def test_reset_removes_tool_data_and_restores_native_settings(
     original = {"theme": "dark", "model": "sonnet"}
     write_json(claude_settings_path(), original)
     write_credential(KEY)
-    configure_claude(sample_models[:1])
+    configure_claude(sample_models[2:3])
 
     assert reset_integration() is True
     assert read_json(claude_settings_path()) == original

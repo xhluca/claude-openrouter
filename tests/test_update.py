@@ -86,6 +86,7 @@ def test_editable_venv_update_is_refused(tmp_path, monkeypatch) -> None:
 )
 def test_update_reports_before_and_after(installed, expected, monkeypatch, capsys) -> None:
     command = ["package-manager", "upgrade"]
+    monkeypatch.setattr(update, "_source_install_location", lambda: None)
     monkeypatch.setattr(update, "_upgrade_command", lambda: command)
     monkeypatch.setattr(update, "_installed_version", lambda: installed)
     monkeypatch.setattr(
@@ -101,3 +102,56 @@ def test_update_reports_before_and_after(installed, expected, monkeypatch, capsy
     output = capsys.readouterr().out
     assert "Checking for the latest Claude OpenRouter release…" in output
     assert output.rstrip().endswith(expected)
+
+
+def test_update_keeps_a_source_install_that_is_ahead_of_pypi(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(
+        update,
+        "_source_install_location",
+        lambda: "/work/claude-openrouter",
+    )
+    monkeypatch.setattr(update, "_published_version", lambda: "0.3.0")
+    monkeypatch.setattr(
+        update.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("the package manager must not run")
+        ),
+    )
+
+    update.update_installed_package("0.4.0")
+
+    assert "source build 0.4.0 is ahead of" in capsys.readouterr().out
+
+
+def test_update_refuses_source_install_when_registry_comparison_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        update,
+        "_source_install_location",
+        lambda: "/work/claude-openrouter",
+    )
+    monkeypatch.setattr(update, "_published_version", lambda: None)
+
+    with pytest.raises(RuntimeError, match="could not be compared safely"):
+        update.update_installed_package("0.4.0")
+
+
+def test_update_replaces_source_install_when_pypi_is_newer(monkeypatch, capsys) -> None:
+    command = ["package-manager", "upgrade"]
+    monkeypatch.setattr(update, "_source_install_location", lambda: "/work/source")
+    monkeypatch.setattr(update, "_published_version", lambda: "0.5.0")
+    monkeypatch.setattr(update, "_upgrade_command", lambda: command)
+    monkeypatch.setattr(update, "_installed_version", lambda: "0.5.0")
+    monkeypatch.setattr(
+        update.subprocess,
+        "run",
+        lambda actual, check: subprocess.CompletedProcess(actual, 0)
+        if actual == command and check is False
+        else (_ for _ in ()).throw(AssertionError(actual)),
+    )
+
+    update.update_installed_package("0.4.0")
+
+    assert "Updated Claude OpenRouter from 0.4.0 to 0.5.0." in capsys.readouterr().out

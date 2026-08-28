@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import secrets
 import shutil
 import stat
 from pathlib import Path
 from typing import Any
 
-from .models import picker_row
-from .openrouter import read_credential
+from .models import hybrid_openrouter_allowed, namespaced_model, picker_row
 from .paths import (
+    anthropic_credential_path,
     backup_path,
     cache_dir,
     claude_settings_path,
@@ -18,15 +19,20 @@ from .paths import (
     helper_path,
     launch_settings_path,
     preferences_path,
+    router_token_path,
     state_dir,
 )
 from .storage import atomic_write_json, atomic_write_text, read_json_object
 
-BASE_URL = "https://openrouter.ai/api"
+LEGACY_BASE_URL = "https://openrouter.ai/api"
+DEFAULT_ROUTER_PORT = 9417
+BASE_URL = f"http://127.0.0.1:{DEFAULT_ROUTER_PORT}"
 ROOT_FIELDS = ("apiKeyHelper", "modelPicker", "model")
 LEGACY_ENV_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-ENV_FIELDS = (*LEGACY_ENV_FIELDS, "ANTHROPIC_CUSTOM_HEADERS")
-BACKUP_VERSION = 2
+VERSION_2_ENV_FIELDS = (*LEGACY_ENV_FIELDS, "ANTHROPIC_CUSTOM_HEADERS")
+ENV_FIELDS = (*VERSION_2_ENV_FIELDS, "ENABLE_TOOL_SEARCH")
+BACKUP_VERSION = 3
+LOCAL_TOKEN_HEADER = "X-Claude-OpenRouter-Token"
 
 
 def _field_snapshot(document: dict[str, Any], field: str) -> dict[str, Any]:
@@ -77,6 +83,9 @@ def load_preferences() -> dict[str, Any]:
     favorites = document.get("favorites", [])
     if not isinstance(favorites, list) or not all(isinstance(item, str) for item in favorites):
         raise RuntimeError(f"invalid favorites in {preferences_path()}")
+    auth = document.get("anthropic_auth", "max")
+    if auth not in {"max", "api"}:
+        raise RuntimeError(f"invalid Anthropic authentication mode in {preferences_path()}")
     return document
 
 
@@ -84,31 +93,55 @@ def favorite_ids() -> list[str]:
     return list(load_preferences().get("favorites", []))
 
 
-def save_preferences(models: list[dict[str, Any]], default_model: str) -> None:
+def save_preferences(
+    models: list[dict[str, Any]],
+    default_model: str,
+    *,
+    anthropic_auth: str = "max",
+    port: int = DEFAULT_ROUTER_PORT,
+) -> None:
+    if anthropic_auth not in {"max", "api"}:
+        raise ValueError("Anthropic authentication must be max or api")
+    if not 1 <= port <= 65535:
+        raise ValueError("router port must be between 1 and 65535")
     atomic_write_json(
         preferences_path(),
         {
-            "version": 1,
+            "version": 2,
+            "mode": "hybrid",
             "favorites": [str(model["id"]) for model in models],
             "default_model": default_model,
+            "anthropic_auth": anthropic_auth,
+            "router_port": port,
         },
     )
 
 
-def _without_authorization(headers: str | None) -> str:
+def _without_managed_headers(headers: str | None) -> str:
     if not headers:
         return ""
     return "\n".join(
         line
         for line in headers.splitlines()
-        if line.partition(":")[0].strip().casefold() != "authorization"
+        if line.partition(":")[0].strip().casefold()
+        not in {"authorization", LOCAL_TOKEN_HEADER.casefold()}
     ).strip()
 
 
-def _openrouter_headers(headers: str | None, key: str) -> str:
-    existing = _without_authorization(headers)
-    authorization = f"Authorization: Bearer {key}"
-    return "\n".join(part for part in (existing, authorization) if part)
+def _router_headers(headers: str | None, token: str) -> str:
+    existing = _without_managed_headers(headers)
+    local_auth = f"{LOCAL_TOKEN_HEADER}: {token}"
+    return "\n".join(part for part in (existing, local_auth) if part)
+
+
+def ensure_router_token() -> str:
+    path = router_token_path()
+    if not path.exists():
+        atomic_write_text(path, f"{secrets.token_urlsafe(32)}\n", 0o600)
+    token = path.read_text(encoding="utf-8").strip()
+    if not token or any(character.isspace() for character in token):
+        raise RuntimeError(f"invalid local router token at {path}")
+    return token
 
 
 def _active_backup() -> bool:
@@ -118,15 +151,36 @@ def _active_backup() -> bool:
     return read_json_object(path).get("version") == BACKUP_VERSION
 
 
-def configure_claude(models: list[dict[str, Any]], *, native_login: bool = True) -> Path:
-    """Route ordinary Claude Code sessions through OpenRouter.
+def configure_claude(
+    models: list[dict[str, Any]],
+    *,
+    native_login: bool = True,
+    anthropic_auth: str = "max",
+    port: int = DEFAULT_ROUTER_PORT,
+) -> Path:
+    """Route ordinary Claude Code sessions through the fail-closed local router.
 
-    The bearer token is a custom request header rather than an external Claude
-    authentication source, so Claude Code can retain its native Claude.ai login
-    for connectors and agent features.
+    Claude retains native OAuth for Claude models. OpenRouter credentials stay
+    inside the router and never enter Claude Code's process environment.
     """
     if not models:
         raise ValueError("select at least one model")
+    if not 1 <= port <= 65535:
+        raise ValueError("router port must be between 1 and 65535")
+    blocked = [
+        str(model.get("id", ""))
+        for model in models
+        if not hybrid_openrouter_allowed(str(model.get("id", "")))
+    ]
+    if blocked:
+        raise ValueError(
+            "hybrid mode keeps Anthropic models off OpenRouter; select the built-in "
+            f"Claude row instead (blocked: {', '.join(blocked)})"
+        )
+    if anthropic_auth not in {"max", "api"}:
+        raise ValueError("Anthropic authentication must be max or api")
+    if anthropic_auth == "api" and not anthropic_credential_path().exists():
+        raise RuntimeError("Anthropic API mode requires a configured Anthropic credential")
     if not _active_backup():
         migrate_legacy_settings()
 
@@ -141,59 +195,59 @@ def configure_claude(models: list[dict[str, Any]], *, native_login: bool = True)
     old_preferences = load_preferences()
     old_default = old_preferences.get("default_model")
     ids = [str(model["id"]) for model in models]
-    default_model = old_default if isinstance(old_default, str) and old_default in ids else ids[0]
+    default_id = old_default if isinstance(old_default, str) and old_default in ids else ids[0]
+    default_model = namespaced_model(default_id)
 
     settings.pop("apiKeyHelper", None)
     env = dict(existing_env or {})
-    env["ANTHROPIC_BASE_URL"] = BASE_URL
-    env.pop("ANTHROPIC_API_KEY", None)
+    env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
+    # Empty overrides prevent inherited shell credentials from globally
+    # shadowing native OAuth. Claude treats empty authentication values as absent.
+    env["ANTHROPIC_API_KEY"] = ""
     previous_headers = env.get("ANTHROPIC_CUSTOM_HEADERS")
     if previous_headers is not None and not isinstance(previous_headers, str):
         raise RuntimeError(f"ANTHROPIC_CUSTOM_HEADERS in {path} must be a string")
-    key = read_credential()
+    token = ensure_router_token()
     if native_login:
-        env.pop("ANTHROPIC_AUTH_TOKEN", None)
-        env["ANTHROPIC_CUSTOM_HEADERS"] = _openrouter_headers(previous_headers, key)
+        env["ANTHROPIC_AUTH_TOKEN"] = ""
+        env["ANTHROPIC_CUSTOM_HEADERS"] = _router_headers(previous_headers, token)
     else:
-        env["ANTHROPIC_AUTH_TOKEN"] = key
-        headers = _without_authorization(previous_headers)
-        if headers:
-            env["ANTHROPIC_CUSTOM_HEADERS"] = headers
-        else:
-            env.pop("ANTHROPIC_CUSTOM_HEADERS", None)
+        # This lets OpenRouter-only sessions reach the local router without a
+        # Claude login. Native Claude routes still reject this local-only token.
+        env["ANTHROPIC_AUTH_TOKEN"] = token
+        env["ANTHROPIC_CUSTOM_HEADERS"] = _router_headers(previous_headers, token)
+    # Deferred tool loading is currently rejected by non-Anthropic models in
+    # Agent View. Connectors remain authenticated; their tools load eagerly.
+    env["ENABLE_TOOL_SEARCH"] = "false"
     settings["env"] = env
     settings["modelPicker"] = {
-        "options": [picker_row(model) for model in models],
-        "replaceBuiltInOptions": True,
+        "options": [picker_row(model, hybrid=True) for model in models],
+        "replaceBuiltInOptions": False,
     }
     settings["model"] = default_model
     atomic_write_json(path, settings)
     launch_settings_path().unlink(missing_ok=True)
     helper_path().unlink(missing_ok=True)
-    save_preferences(models, default_model)
+    save_preferences(
+        models,
+        default_id,
+        anthropic_auth=anthropic_auth,
+        port=port,
+    )
     return path
 
 
 def refresh_claude_credential(key: str) -> bool:
-    """Update the managed request header after ``clor config`` changes the key."""
+    """Return whether active hybrid settings will read the new key automatically."""
+    del key
     if not _active_backup() or not claude_settings_path().exists():
         return False
     path = claude_settings_path()
     settings = read_json_object(path)
     env = settings.get("env")
-    if not isinstance(env, dict) or env.get("ANTHROPIC_BASE_URL") != BASE_URL:
-        return False
-    updated_env = dict(env)
-    if "ANTHROPIC_AUTH_TOKEN" in updated_env:
-        updated_env["ANTHROPIC_AUTH_TOKEN"] = key
-    else:
-        headers = env.get("ANTHROPIC_CUSTOM_HEADERS")
-        if headers is not None and not isinstance(headers, str):
-            raise RuntimeError(f"ANTHROPIC_CUSTOM_HEADERS in {path} must be a string")
-        updated_env["ANTHROPIC_CUSTOM_HEADERS"] = _openrouter_headers(headers, key)
-    settings["env"] = updated_env
-    atomic_write_json(path, settings)
-    return True
+    return isinstance(env, dict) and str(env.get("ANTHROPIC_BASE_URL", "")).startswith(
+        "http://127.0.0.1:"
+    )
 
 
 def _restore_snapshot(document: dict[str, Any], field: str, snapshot: dict[str, Any]) -> None:
@@ -204,7 +258,7 @@ def _restore_snapshot(document: dict[str, Any], field: str, snapshot: dict[str, 
 
 
 def _looks_managed_picker(value: Any) -> bool:
-    if not isinstance(value, dict) or value.get("replaceBuiltInOptions") is not True:
+    if not isinstance(value, dict):
         return False
     options = value.get("options")
     return isinstance(options, list) and any(
@@ -242,7 +296,12 @@ def restore_claude_settings() -> bool:
             raise RuntimeError(f"the env setting in {path} must be a JSON object")
         env_object = dict(env or {})
         backup_version = backup.get("version", 1)
-        fields = ENV_FIELDS if backup_version == BACKUP_VERSION else LEGACY_ENV_FIELDS
+        if backup_version >= 3:
+            fields = ENV_FIELDS
+        elif backup_version == 2:
+            fields = VERSION_2_ENV_FIELDS
+        else:
+            fields = LEGACY_ENV_FIELDS
         for field in fields:
             snapshot = env_backup.get(field)
             if not isinstance(snapshot, dict):
@@ -262,8 +321,18 @@ def restore_claude_settings() -> bool:
         }
         managed_model = settings.get("model") in managed_model_ids
         env = settings.get("env")
-        managed_base = (
-            isinstance(env, dict) and env.get("ANTHROPIC_BASE_URL") == BASE_URL
+        managed_headers = (
+            isinstance(env, dict)
+            and isinstance(env.get("ANTHROPIC_CUSTOM_HEADERS"), str)
+            and LOCAL_TOKEN_HEADER.casefold()
+            in env["ANTHROPIC_CUSTOM_HEADERS"].casefold()
+        )
+        managed_base = isinstance(env, dict) and (
+            env.get("ANTHROPIC_BASE_URL") == LEGACY_BASE_URL
+            or (
+                str(env.get("ANTHROPIC_BASE_URL", "")).startswith("http://127.0.0.1:")
+                and (managed_picker or managed_headers)
+            )
         )
         if not (managed_helper or managed_picker or managed_base):
             return False
@@ -274,20 +343,22 @@ def restore_claude_settings() -> bool:
         if managed_model:
             settings.pop("model", None)
         if isinstance(env, dict) and (
-            managed_helper or managed_picker or env.get("ANTHROPIC_BASE_URL") == BASE_URL
+            managed_helper or managed_picker or managed_base
         ):
             env = dict(env)
-            if env.get("ANTHROPIC_BASE_URL") == BASE_URL:
+            if managed_base:
                 env.pop("ANTHROPIC_BASE_URL", None)
             for field in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
                 if env.get(field) == "":
                     env.pop(field, None)
             if managed_base and isinstance(env.get("ANTHROPIC_CUSTOM_HEADERS"), str):
-                headers = _without_authorization(env["ANTHROPIC_CUSTOM_HEADERS"])
+                headers = _without_managed_headers(env["ANTHROPIC_CUSTOM_HEADERS"])
                 if headers:
                     env["ANTHROPIC_CUSTOM_HEADERS"] = headers
                 else:
                     env.pop("ANTHROPIC_CUSTOM_HEADERS", None)
+            if managed_base and env.get("ENABLE_TOOL_SEARCH") in {"true", "false"}:
+                env.pop("ENABLE_TOOL_SEARCH", None)
             if env:
                 settings["env"] = env
             else:
@@ -307,12 +378,27 @@ def migrate_legacy_settings() -> bool:
         legacy_present = read_json_object(backup_path()).get("version", 1) != BACKUP_VERSION
     if not legacy_present and claude_settings_path().exists():
         settings = read_json_object(claude_settings_path())
+        env = settings.get("env")
+        managed_headers = (
+            isinstance(env, dict)
+            and isinstance(env.get("ANTHROPIC_CUSTOM_HEADERS"), str)
+            and LOCAL_TOKEN_HEADER.casefold()
+            in env["ANTHROPIC_CUSTOM_HEADERS"].casefold()
+        )
         legacy_present = (
             settings.get("apiKeyHelper") == str(helper_path().resolve())
             or _looks_managed_picker(settings.get("modelPicker"))
             or (
-                isinstance(settings.get("env"), dict)
-                and settings["env"].get("ANTHROPIC_BASE_URL") == BASE_URL
+                isinstance(env, dict)
+                and (
+                    env.get("ANTHROPIC_BASE_URL") == LEGACY_BASE_URL
+                    or (
+                        str(env.get("ANTHROPIC_BASE_URL", "")).startswith(
+                            "http://127.0.0.1:"
+                        )
+                        and managed_headers
+                    )
+                )
             )
         )
     if not legacy_present:
@@ -345,6 +431,8 @@ def assert_private_files() -> None:
     """Raise if a secret-bearing file is accessible by group or other users."""
     paths = [
         credential_path(),
+        anthropic_credential_path(),
+        router_token_path(),
         preferences_path(),
         helper_path(),
         launch_settings_path(),

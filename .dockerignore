@@ -1,0 +1,9 @@
+.git
+.pytest_cache
+.ruff_cache
+.venv
+dist
+docs/assets/*.gif
+docs/assets/*.mp4
+__pycache__
+*.pyc

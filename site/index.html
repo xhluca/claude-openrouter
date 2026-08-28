@@ -27,9 +27,9 @@
         <p class="label">OpenRouter models in Claude Code</p>
         <h1>Your models. Claude's picker.</h1>
         <p class="intro">
-          Add OpenRouter favorites to Claude Code's native <code>/model</code>
-          menu while preserving your Claude.ai login and connectors. No proxy
-          or background service.
+          Add OpenRouter favorites beside Claude's built-in models in the
+          native <code>/model</code> menu while preserving your Claude.ai login,
+          connectors, and Max billing for Claude models.
         </p>
 
         <div class="install" aria-label="Installation command">
@@ -55,9 +55,10 @@
         </p>
 
         <div class="note">
-          Secret-bearing files stay local with mode 0600. Your native Claude.ai
-          login remains available for connectors while model requests route
-          through OpenRouter. Reset everything with <code>clor reset</code>.
+          A fail-closed loopback router keeps provider credentials separate:
+          Claude models go only to Anthropic, and labeled OpenRouter favorites
+          go only to OpenRouter. Secret-bearing files stay local with mode 0600.
+          Reset everything with <code>clor reset</code>.
         </div>
       </main>
 

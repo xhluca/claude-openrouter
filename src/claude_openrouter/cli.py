@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
 import re
 import shutil
@@ -13,8 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .anthropic import (
+    read_anthropic_credential,
+    validate_anthropic_key_shape,
+    write_anthropic_credential,
+)
 from .launcher import has_native_login, launch_claude
-from .models import exact_models, print_models, search_models
+from .models import exact_models, hybrid_openrouter_allowed, print_models, search_models
 from .openrouter import (
     load_catalog,
     read_credential,
@@ -23,15 +29,19 @@ from .openrouter import (
     validate_key_shape,
     write_credential,
 )
-from .paths import catalog_path, claude_settings_path, credential_path
+from .paths import anthropic_credential_path, catalog_path, claude_settings_path, credential_path
 from .picker import choose_models
+from .proxy import DEFAULT_HOST, DEFAULT_PORT, run_router
+from .service import healthcheck, start_service, stop_service
 from .settings import (
     assert_private_files,
     configure_claude,
     favorite_ids,
+    load_preferences,
     refresh_claude_credential,
     reset_integration,
 )
+from .storage import read_json_object
 from .uninstall import remove_installed_package
 from .update import update_installed_package
 
@@ -55,7 +65,7 @@ def _styled(value: object, code: str, *, stream: Any | None = None) -> str:
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
         prog="claude-openrouter",
-        description="Connect Claude Code directly to selected OpenRouter models.",
+        description="Route native Claude and selected OpenRouter models safely.",
     )
     root.add_argument("--version", action="version", version=__version__)
     commands = root.add_subparsers(dest="command", required=True)
@@ -81,6 +91,18 @@ def parser() -> argparse.ArgumentParser:
         metavar="MODEL",
         help="skip the picker and select these exact model IDs",
     )
+    setup.add_argument(
+        "--anthropic-key-stdin",
+        action="store_true",
+        help="read an Anthropic API key from stdin after the OpenRouter key",
+    )
+    setup.add_argument(
+        "--anthropic-auth",
+        choices=("max", "api"),
+        default="max",
+        help="route native Claude models through Max OAuth or an Anthropic API key",
+    )
+    setup.add_argument("--port", type=int, default=DEFAULT_PORT, help=argparse.SUPPRESS)
 
     select = commands.add_parser("select", help="replace the saved /model favorites")
     select.add_argument("model", nargs="?", help="exact model ID (same as --model)")
@@ -91,6 +113,23 @@ def parser() -> argparse.ArgumentParser:
     config = commands.add_parser("config", help="change the stored OpenRouter API key")
     config.add_argument("--key-stdin", action="store_true", help="read the key from stdin")
     config.add_argument("--no-validate", action="store_true", help="skip the key metadata check")
+    config.add_argument(
+        "--anthropic-auth",
+        choices=("max", "api"),
+        help="change how native Claude models are billed",
+    )
+    config.add_argument(
+        "--anthropic-key-stdin",
+        action="store_true",
+        help="read and store an Anthropic API key, then select API billing",
+    )
+
+    doctor = commands.add_parser("doctor", help="check hybrid routing and Claude authentication")
+    doctor.add_argument("--json", action="store_true", help="print machine-readable status")
+
+    serve = commands.add_parser("serve", help="run the loopback hybrid router")
+    serve.add_argument("--host", default=DEFAULT_HOST)
+    serve.add_argument("--port", type=int, default=DEFAULT_PORT)
 
     commands.add_parser("reset", help="restore Claude Code's original settings and remove data")
     commands.add_parser("uninstall", help="reset the integration and uninstall this tool")
@@ -168,9 +207,9 @@ def _masked_input(prompt: str) -> str:
         termios.tcsetattr(descriptor, termios.TCSADRAIN, original)
 
 
-def _confirm_key_reuse(path: Path) -> bool:
+def _confirm_key_reuse(path: Path, label: str = "OpenRouter API key") -> bool:
     while True:
-        answer = input(f"Reuse the OpenRouter API key at {path}? [Y/n]: ").strip().casefold()
+        answer = input(f"Reuse the {label} at {path}? [Y/n]: ").strip().casefold()
         if answer in {"", "y", "yes"}:
             return True
         if answer in {"n", "no"}:
@@ -187,6 +226,21 @@ def _read_key(*, from_stdin: bool) -> str:
             return existing
         key = _masked_input("OpenRouter API key: ").strip()
     validate_key_shape(key)
+    return key
+
+
+def _read_anthropic_key(*, from_stdin: bool) -> str:
+    if from_stdin:
+        key = sys.stdin.readline().strip()
+    else:
+        try:
+            existing = read_anthropic_credential()
+        except RuntimeError:
+            existing = None
+        if existing and _confirm_key_reuse(anthropic_credential_path(), "Anthropic API key"):
+            return existing
+        key = _masked_input("Anthropic API key: ").strip()
+    validate_anthropic_key_shape(key)
     return key
 
 
@@ -226,10 +280,11 @@ def _choose_or_validate(
 ) -> list[dict[str, Any]]:
     if requested is not None:
         return exact_models(models, requested)
-    chosen = choose_models(models, favorite_ids())
+    eligible = [model for model in models if hybrid_openrouter_allowed(str(model.get("id", "")))]
+    chosen = choose_models(eligible, favorite_ids())
     if chosen is None:
         raise RuntimeError("selection cancelled")
-    return exact_models(models, chosen)
+    return exact_models(eligible, chosen)
 
 
 def command_index(*, as_json: bool) -> int:
@@ -251,14 +306,35 @@ def command_search(queries: list[str], *, regex: bool, as_json: bool) -> int:
     return 0 if matches else 1
 
 
-def command_setup(*, key_stdin: bool, no_validate: bool, ids: list[str] | None) -> int:
+def command_setup(
+    *,
+    key_stdin: bool,
+    no_validate: bool,
+    ids: list[str] | None,
+    anthropic_auth: str,
+    anthropic_key_stdin: bool,
+    port: int,
+) -> int:
     key = _read_key(from_stdin=key_stdin)
     if not no_validate:
         validate_key(key)
     models = refresh_catalog(key)
     selected = _choose_or_validate(models, ids)
     write_credential(key)
-    settings = configure_claude(selected, native_login=has_native_login())
+    if anthropic_auth == "api":
+        write_anthropic_credential(_read_anthropic_key(from_stdin=anthropic_key_stdin))
+    native_login = has_native_login()
+    if anthropic_auth == "max" and not native_login:
+        raise RuntimeError(
+            "Claude Max routing requires a native Claude.ai login; run `claude auth login` first"
+        )
+    settings = configure_claude(
+        selected,
+        native_login=native_login,
+        anthropic_auth=anthropic_auth,
+        port=port,
+    )
+    service = start_service(port)
     assert_private_files()
     _warn_claude_compatibility()
     print(_styled("✓ Claude OpenRouter is ready", "1;32"))
@@ -272,6 +348,14 @@ def command_setup(*, key_stdin: bool, no_validate: bool, ids: list[str] | None) 
         f"{_styled(catalog_path(), '36')} {_styled(f'({len(models)} models)', '2')}"
     )
     print(f"{_styled('Claude Code settings:', '1;36')} {_styled(settings, '36')}")
+    print(
+        f"{_styled('Hybrid router:', '1;36')} "
+        f"{_styled(f'http://127.0.0.1:{port}', '36')} {_styled(f'({service})', '2')}"
+    )
+    print(
+        f"{_styled('Native Claude billing:', '1;36')} "
+        f"{_styled('Max subscription' if anthropic_auth == 'max' else 'Anthropic API', '1;35')}"
+    )
     print()
     print(_styled("Favorites:", "1;35"))
     for model in selected:
@@ -279,7 +363,7 @@ def command_setup(*, key_stdin: bool, no_validate: bool, ids: list[str] | None) 
     print()
     print(
         f"{_styled('Next:', '1;33')} run {_styled('claude', '1;32')}, then use "
-        f"{_styled('/model', '1;35')} to switch OpenRouter favorites."
+        f"{_styled('/model', '1;35')} to switch between native and OpenRouter models."
     )
     return 0
 
@@ -298,7 +382,18 @@ def command_select(
         requested = models_option
     models = refresh_catalog()
     selected = _choose_or_validate(models, requested)
-    settings = configure_claude(selected, native_login=has_native_login())
+    preferences = load_preferences()
+    port = preferences.get("router_port", DEFAULT_PORT)
+    auth = preferences.get("anthropic_auth", "max")
+    if not isinstance(port, int) or not isinstance(auth, str):
+        raise RuntimeError("invalid hybrid router preferences")
+    settings = configure_claude(
+        selected,
+        native_login=has_native_login(),
+        anthropic_auth=auth,
+        port=port,
+    )
+    start_service(port)
     assert_private_files()
     print(
         _styled(
@@ -311,7 +406,41 @@ def command_select(
     return 0
 
 
-def command_config(*, key_stdin: bool, no_validate: bool) -> int:
+def command_config(
+    *,
+    key_stdin: bool,
+    no_validate: bool,
+    anthropic_auth: str | None,
+    anthropic_key_stdin: bool,
+) -> int:
+    if key_stdin and (anthropic_auth is not None or anthropic_key_stdin):
+        raise ValueError("configure OpenRouter and Anthropic credentials in separate commands")
+    if anthropic_key_stdin and anthropic_auth == "max":
+        raise ValueError("an Anthropic API key cannot be combined with Max billing")
+    if anthropic_auth is not None or anthropic_key_stdin:
+        auth = "api" if anthropic_key_stdin else anthropic_auth
+        assert auth is not None
+        if auth == "api":
+            write_anthropic_credential(
+                _read_anthropic_key(from_stdin=anthropic_key_stdin)
+            )
+        preferences = load_preferences()
+        ids = favorite_ids()
+        if not ids:
+            raise RuntimeError("no favorites are configured; run setup first")
+        port = preferences.get("router_port", DEFAULT_PORT)
+        if not isinstance(port, int):
+            raise RuntimeError("invalid hybrid router port")
+        settings = configure_claude(
+            exact_models(load_catalog(), ids),
+            native_login=has_native_login(),
+            anthropic_auth=auth,
+            port=port,
+        )
+        service = start_service(port)
+        print(f"Native Claude billing changed to {auth}: {settings}")
+        print(f"Hybrid router restarted via {service}.")
+        return 0
     key = _read_key(from_stdin=key_stdin)
     if not no_validate:
         validate_key(key)
@@ -328,13 +457,26 @@ def command_claude(arguments: list[str]) -> int:
     ids = favorite_ids()
     if not ids:
         raise RuntimeError("no OpenRouter favorites are configured; run setup")
-    configure_claude(exact_models(load_catalog(), ids), native_login=has_native_login())
+    preferences = load_preferences()
+    port = preferences.get("router_port", DEFAULT_PORT)
+    auth = preferences.get("anthropic_auth", "max")
+    if not isinstance(port, int) or not isinstance(auth, str):
+        raise RuntimeError("invalid hybrid router preferences")
+    configure_claude(
+        exact_models(load_catalog(), ids),
+        native_login=has_native_login(),
+        anthropic_auth=auth,
+        port=port,
+    )
+    if not healthcheck(port):
+        start_service(port)
     assert_private_files()
     launch_claude(arguments)
     return 0
 
 
 def command_reset() -> int:
+    stop_service()
     restored = reset_integration()
     if restored:
         print(f"Restored Claude Code settings at {claude_settings_path()}.")
@@ -342,6 +484,64 @@ def command_reset() -> int:
         print("Claude Code settings did not need restoring.")
     print("Removed the OpenRouter credential, favorites, index, and integration state.")
     return 0
+
+
+def command_doctor(*, as_json: bool) -> int:
+    preferences = load_preferences()
+    port = preferences.get("router_port", DEFAULT_PORT)
+    auth = preferences.get("anthropic_auth", "max")
+    native_login = has_native_login()
+    try:
+        read_credential()
+        openrouter_credential = True
+    except RuntimeError:
+        openrouter_credential = False
+    try:
+        read_anthropic_credential()
+        anthropic_credential = True
+    except RuntimeError:
+        anthropic_credential = False
+    settings = read_json_object(claude_settings_path(), missing_ok=True)
+    env = settings.get("env")
+    settings_active = isinstance(env, dict) and env.get("ANTHROPIC_BASE_URL") == (
+        f"http://127.0.0.1:{port}"
+    )
+    status = {
+        "configured": bool(favorite_ids()),
+        "settings": settings_active,
+        "router": healthcheck(port) if isinstance(port, int) else False,
+        "router_url": f"http://127.0.0.1:{port}",
+        "anthropic_auth": auth,
+        "native_login": native_login,
+        "openrouter_credential": openrouter_credential,
+        "anthropic_credential": anthropic_credential if auth == "api" else None,
+    }
+    healthy = bool(
+        status["configured"]
+        and status["settings"]
+        and status["router"]
+        and status["openrouter_credential"]
+    )
+    if auth == "max":
+        healthy = healthy and native_login
+    elif auth == "api":
+        healthy = healthy and anthropic_credential
+    if as_json:
+        print(json.dumps(status, indent=2))
+    else:
+        for label, value, ok in (
+            ("Configuration", "ready" if status["configured"] else "missing", status["configured"]),
+            ("Claude settings", "active" if settings_active else "inactive", settings_active),
+            ("Hybrid router", "healthy" if status["router"] else "unavailable", status["router"]),
+            (
+                "Anthropic route",
+                f"{auth} ({'logged in' if native_login else 'not logged in'})",
+                native_login if auth == "max" else anthropic_credential,
+            ),
+        ):
+            color = "1;32" if ok else "1;31"
+            print(f"{_styled(label + ':', '1;36')} {_styled(value, color)}")
+    return 0 if healthy else 1
 
 
 def command_uninstall() -> int:
@@ -374,17 +574,35 @@ def main(argv: list[str] | None = None) -> int:
                 key_stdin=args.key_stdin,
                 no_validate=args.no_validate,
                 ids=args.models,
+                anthropic_auth=args.anthropic_auth,
+                anthropic_key_stdin=args.anthropic_key_stdin,
+                port=args.port,
             )
         if args.command == "select":
             return command_select(args.model, args.model_option, args.models)
         if args.command == "config":
-            return command_config(key_stdin=args.key_stdin, no_validate=args.no_validate)
+            return command_config(
+                key_stdin=args.key_stdin,
+                no_validate=args.no_validate,
+                anthropic_auth=args.anthropic_auth,
+                anthropic_key_stdin=args.anthropic_key_stdin,
+            )
+        if args.command == "doctor":
+            return command_doctor(as_json=args.json)
+        if args.command == "serve":
+            run_router(args.host, args.port)
+            return 0
         if args.command == "reset":
             return command_reset()
         if args.command == "uninstall":
             return command_uninstall()
         if args.command in {"update", "upgrade"}:
+            preferences = load_preferences()
             update_installed_package(__version__)
+            if preferences.get("mode") == "hybrid":
+                port = preferences.get("router_port", DEFAULT_PORT)
+                if isinstance(port, int):
+                    start_service(port)
             return 0
         if args.command == "claude":
             return command_claude(args.claude_args)

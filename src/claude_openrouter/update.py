@@ -9,11 +9,15 @@ import shutil
 import site
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from importlib import metadata
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 PACKAGE_NAME = "claude-openrouter"
 DEFAULT_INDEX_URL = "https://pypi.org/simple"
+PYPI_JSON_URL = "https://pypi.org/pypi/claude-openrouter/json"
 
 
 def _inside(path: Path, directory: Path) -> bool:
@@ -58,6 +62,54 @@ def _is_editable_install() -> bool:
     except (TypeError, json.JSONDecodeError):
         return False
     return bool(document.get("dir_info", {}).get("editable"))
+
+
+def _source_install_location() -> str | None:
+    """Return a direct source location that a registry update must not replace."""
+    try:
+        direct_url = metadata.distribution(PACKAGE_NAME).read_text("direct_url.json")
+    except metadata.PackageNotFoundError:
+        return None
+    if not direct_url:
+        return None
+    try:
+        document = json.loads(direct_url)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if "dir_info" not in document and "vcs_info" not in document:
+        return None
+    url = document.get("url")
+    if not isinstance(url, str) or not url:
+        return "an unknown source checkout"
+    parsed = urlsplit(url)
+    if parsed.scheme == "file":
+        return unquote(parsed.path)
+    return url
+
+
+def _stable_version_tuple(value: str) -> tuple[int, ...] | None:
+    if re.fullmatch(r"\d+(?:\.\d+)*", value) is None:
+        return None
+    return tuple(int(part) for part in value.split("."))
+
+
+def _published_version() -> str | None:
+    """Return the latest stable PyPI version when using the default registry."""
+    index_url = os.environ.get("CLAUDE_OPENROUTER_PYPI_INDEX_URL", DEFAULT_INDEX_URL)
+    if index_url.rstrip("/") != DEFAULT_INDEX_URL.rstrip("/"):
+        return None
+    request = urllib.request.Request(
+        PYPI_JSON_URL,
+        headers={"User-Agent": f"{PACKAGE_NAME}-updater"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            document = json.load(response)
+    except (OSError, ValueError, urllib.error.URLError):
+        return None
+    info = document.get("info") if isinstance(document, dict) else None
+    version = info.get("version") if isinstance(info, dict) else None
+    return version if isinstance(version, str) and version else None
 
 
 def _pip_command(*, user: bool = False) -> list[str]:
@@ -164,6 +216,23 @@ def _installed_version() -> str:
 def update_installed_package(previous_version: str) -> None:
     """Upgrade clor in place and report the version transition."""
     print("Checking for the latest Claude OpenRouter release…")
+    source = _source_install_location()
+    if source is not None:
+        published = _published_version()
+        current_tuple = _stable_version_tuple(previous_version)
+        published_tuple = _stable_version_tuple(published) if published else None
+        if current_tuple is None or published_tuple is None:
+            raise RuntimeError(
+                f"this clor build is installed from source at {source}; the published version "
+                "could not be compared safely, so the registry update was refused"
+            )
+        if published_tuple <= current_tuple:
+            relation = "matches" if published_tuple == current_tuple else "is ahead of"
+            print(
+                f"Claude OpenRouter source build {previous_version} {relation} the latest "
+                f"published release ({published}); no registry update needed."
+            )
+            return
     command = _upgrade_command()
     result = subprocess.run(command, check=False)
     if result.returncode != 0:

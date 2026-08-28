@@ -8,6 +8,24 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+OPENROUTER_MODEL_PREFIX = "clor/openrouter/"
+
+
+def namespaced_model(model_id: str) -> str:
+    return f"{OPENROUTER_MODEL_PREFIX}{model_id}"
+
+
+def original_model(model_id: str) -> str | None:
+    if not model_id.startswith(OPENROUTER_MODEL_PREFIX):
+        return None
+    original = model_id[len(OPENROUTER_MODEL_PREFIX) :]
+    return original or None
+
+
+def hybrid_openrouter_allowed(model_id: str) -> bool:
+    normalized = model_id.casefold()
+    return not normalized.startswith("anthropic/") and normalized != "openrouter/auto"
+
 
 def searchable_text(model: dict[str, Any]) -> str:
     values = (model.get("id"), model.get("name"), model.get("description"))
@@ -132,12 +150,13 @@ def picker_description(model: dict[str, Any]) -> str:
     return " · ".join(parts)[:240]
 
 
-def picker_row(model: dict[str, Any]) -> dict[str, str]:
+def picker_row(model: dict[str, Any], *, hybrid: bool = False) -> dict[str, str]:
     model_id = str(model["id"])
     name = model.get("name")
+    label = name if isinstance(name, str) and name else model_id
     return {
-        "model": model_id,
-        "label": name if isinstance(name, str) and name else model_id,
+        "model": namespaced_model(model_id) if hybrid else model_id,
+        "label": f"{label} · OpenRouter" if hybrid else label,
         "description": picker_description(model),
     }
 
