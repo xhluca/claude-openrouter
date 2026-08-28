@@ -4,8 +4,13 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
+
+ANSI_ESCAPE = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[()][A-Za-z0-9]|[=>])"
+)
 
 
 def main() -> int:
@@ -23,7 +28,15 @@ def main() -> int:
         ):
             stream.append(event[2])
     output = "".join(stream)
-    missing = [required for required in sys.argv[2:] if required not in output]
+    normalized = ANSI_ESCAPE.sub("", output).replace("\r", "")
+    compact = "".join(normalized.split())
+    missing = [
+        required
+        for required in sys.argv[2:]
+        if required not in output
+        and required not in normalized
+        and "".join(required.split()) not in compact
+    ]
     if missing:
         raise SystemExit(f"demo cast is missing: {', '.join(missing)}")
     print(f"Verified {len(sys.argv) - 2} required demo interactions.")

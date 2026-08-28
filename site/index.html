@@ -10,7 +10,8 @@
     <meta property="og:description" content="A small CLI that connects Claude Code to OpenRouter.">
     <meta property="og:url" content="https://xhluca.github.io/claude-openrouter/">
     <link rel="canonical" href="https://xhluca.github.io/claude-openrouter/">
-    <link rel="stylesheet" href="assets/site.css?v=2">
+    <link rel="stylesheet" href="assets/asciinema-player.css?v=1">
+    <link rel="stylesheet" href="assets/site.css?v=3">
     <title>Claude OpenRouter — OpenRouter models in Claude Code</title>
   </head>
   <body>
@@ -37,12 +38,29 @@
           <button type="button" data-copy="install-command" aria-label="Copy install command">Copy</button>
         </div>
 
-        <figure class="demo">
-          <img src="assets/demo.gif?v=4" alt="Installing Claude OpenRouter, entering a masked API key, selecting GLM-5.3-Flash, and receiving a live Claude Code response">
+        <figure class="demo" aria-label="Interactive Claude OpenRouter terminal demo">
+          <div class="demo-topbar">
+            <span class="demo-label"><i></i> Interactive terminal</span>
+            <div class="demo-controls" aria-label="Demo playback controls">
+              <button type="button" data-demo-action="rewind" aria-label="Rewind demo by five seconds">−5s</button>
+              <button type="button" data-demo-action="toggle" aria-label="Pause demo">Pause</button>
+              <button type="button" data-demo-action="forward" aria-label="Advance demo by five seconds">+5s</button>
+              <button type="button" data-demo-action="replay" aria-label="Replay demo from the beginning">Replay</button>
+            </div>
+          </div>
+          <div class="demo-stage">
+            <div id="demo-player">
+              <a href="assets/demo.cast?v=8">Open the terminal recording</a>
+            </div>
+            <noscript>
+              <img src="assets/demo.gif?v=8" alt="Installing Claude OpenRouter, entering a masked API key, selecting GLM-5.3 interactively, and receiving a live Claude Code response">
+            </noscript>
+          </div>
           <figcaption>
-            Real-time curl install · masked key · live GLM-5.3-Flash response ·
-            <a href="assets/demo.mp4?v=4">MP4</a> ·
-            <a href="assets/demo.cast?v=4">asciicast</a>
+            Guided curl install · masked key · interactive GLM-5.3 selection ·
+            <span data-demo-status aria-live="polite">Loading</span> ·
+            <a href="assets/demo.mp4?v=8">MP4</a> ·
+            <a href="assets/demo.cast?v=8">asciicast</a>
           </figcaption>
         </figure>
 
@@ -67,6 +85,7 @@
         <a href="install.sh">View installer</a>
       </footer>
     </div>
-    <script src="assets/site.js?v=1"></script>
+    <script src="assets/asciinema-player.min.js?v=1"></script>
+    <script src="assets/site.js?v=2"></script>
   </body>
 </html>

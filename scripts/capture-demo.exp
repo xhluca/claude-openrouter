@@ -4,7 +4,7 @@
 set timeout 180
 set prompt "demo ❯ "
 set env(PS1) $prompt
-set demo_root [file dirname $env(CLOR_DEMO_KEY_FILE)]
+set demo_root $env(CLOR_DEMO_ROOT)
 set tmux_config "$demo_root/tmux.conf"
 set tmux_handle [open $tmux_config w]
 puts $tmux_handle "set -g status off"
@@ -48,6 +48,31 @@ proc type_tui {value} {
     send -- "\r"
 }
 
+proc submit_tui {value} {
+    # Send slash commands as one burst so intermediate autocomplete states such
+    # as `/m` never survive long enough to become a rendered video frame.
+    send -- $value
+    after 120
+    expect -timeout 0 {
+        -re {.+} {}
+        timeout {}
+    }
+    after 330
+    send -- "\r"
+}
+
+proc type_field {value} {
+    foreach character [split $value ""] {
+        send -- $character
+        after 25
+        expect -timeout 0 {
+            -re {.+} {}
+            timeout {}
+        }
+        after [expr {25 + int(rand() * 30)}]
+    }
+}
+
 proc visible_pause {milliseconds} {
     set elapsed 0
     while {$elapsed < $milliseconds} {
@@ -65,7 +90,7 @@ proc wait_for_pane {socket pattern timeout_ms error_message} {
     while {$elapsed < $timeout_ms} {
         visible_pause 250
         incr elapsed 250
-        if {[catch {exec tmux -L $socket capture-pane -p -t 0} pane]} {
+        if {[catch {exec tmux -L $socket capture-pane -p -S - -t 0} pane]} {
             continue
         }
         if {[regexp -- $pattern $pane]} {
@@ -77,16 +102,40 @@ proc wait_for_pane {socket pattern timeout_ms error_message} {
     exit 1
 }
 
-proc wait_for_response {socket expected timeout_ms} {
+proc wait_for_response {socket timeout_ms} {
     set elapsed 0
     set stable_checks 0
+    set permission_handled 0
+    visible_pause 1500
     while {$elapsed < $timeout_ms} {
         visible_pause 500
         incr elapsed 500
         if {[catch {exec tmux -L $socket capture-pane -p -t 0} pane]} {
             continue
         }
-        if {[string first $expected $pane] >= 0 && [string first "esc to interrupt" $pane] < 0} {
+        set web_fetch_prompt [expr {[string first "Do you want to allow Claude to fetch this content?" $pane] >= 0}]
+        set web_search_prompt [expr {
+            [string first "Claude wants" $pane] >= 0
+            && [string first "1. Yes" $pane] >= 0
+        }]
+        if {!$permission_handled && $web_search_prompt} {
+            visible_pause 1200
+            exec tmux -L $socket send-keys -t 0 1 Enter
+            set permission_handled 1
+            set stable_checks 0
+            continue
+        }
+        if {!$permission_handled && $web_fetch_prompt} {
+            visible_pause 1200
+            exec tmux -L $socket send-keys -t 0 2 Enter
+            set permission_handled 1
+            set stable_checks 0
+            continue
+        }
+        if {!$web_search_prompt && !$web_fetch_prompt} {
+            set permission_handled 0
+        }
+        if {[string first "? for shortcuts" $pane] >= 0} {
             incr stable_checks
             if {$stable_checks >= 4} {
                 return
@@ -95,7 +144,7 @@ proc wait_for_response {socket expected timeout_ms} {
             set stable_checks 0
         }
     }
-    puts stderr "GLM-5.3-Flash did not finish the live Claude response"
+    puts stderr "GLM-5.3 did not finish the live Claude response"
     catch {exec tmux -L $socket kill-server}
     exit 1
 }
@@ -104,32 +153,28 @@ set key_handle [open $env(CLOR_DEMO_KEY_FILE) r]
 set demo_key [string trim [read $key_handle]]
 close $key_handle
 
-spawn -noecho tmux -f $tmux_config -L $tmux_socket new-session -x 110 -y 38 \
+spawn -noecho tmux -f $tmux_config -L $tmux_socket new-session -x 75 -y 24 \
     /bin/bash --noprofile --norc -i
 expect -exact $prompt
 
 visible_pause 1600
-type_command "curl -LsSf $env(CLOR_DEMO_INSTALL_URL) | sh -s -- --install-only"
-expect -exact "Installation complete."
-expect -exact $prompt
-
-visible_pause 1800
-type_command "clor config"
+type_command "curl -LsSf $env(CLOR_DEMO_INSTALL_URL) | sh"
 expect -exact "OpenRouter API key: "
 type_secret $demo_key
 unset demo_key
-expect -exact "OpenRouter credential updated:"
-expect -exact $prompt
-
-visible_pause 1800
-type_command "clor search glm-5.3-flash"
-expect -re {Refreshed [0-9]+ models; [0-9]+ matched\.}
-expect -exact $prompt
-
-visible_pause 1800
-type_command "clor select z-ai/glm-5.3-flash"
-expect -exact "Saved 1 /model favorite"
-expect -exact "  - z-ai/glm-5.3-flash"
+wait_for_pane $tmux_socket {choose /model favorites} 30000 \
+    "Claude OpenRouter setup did not open its model picker"
+visible_pause 1600
+type_field "glm-5.3"
+wait_for_pane $tmux_socket {z-ai/glm-5\.3} 15000 \
+    "Claude OpenRouter picker did not find GLM-5.3"
+visible_pause 1600
+exec tmux -L $tmux_socket send-keys -t 0 Down
+visible_pause 1600
+send -- "\r"
+visible_pause 1600
+send -- "s"
+expect -exact "Claude OpenRouter is ready"
 expect -exact $prompt
 
 visible_pause 2000
@@ -137,18 +182,24 @@ type_command "claude"
 wait_for_pane $tmux_socket {manual mode on} 30000 \
     "Claude Code did not open its full-screen TUI"
 visible_pause 1800
-type_tui "/model"
+submit_tui "/model"
 wait_for_pane $tmux_socket {Select model} 15000 \
     "Claude Code /model picker did not open"
 visible_pause 1800
 send -- "\r"
-wait_for_pane $tmux_socket {GLM 5\.3 Flash} 15000 \
-    "Claude Code did not select GLM-5.3-Flash"
+wait_for_pane $tmux_socket {GLM 5\.3} 15000 \
+    "Claude Code did not select GLM-5.3"
 
 visible_pause 1800
-type_tui "Hello! Reply with exactly: Hello from GLM-5.3-Flash."
-wait_for_response $tmux_socket "Hello from GLM-5.3-Flash." 180000
-visible_pause 3500
+type_tui "What model powers you, and are its weights publicly available?"
+wait_for_response $tmux_socket 240000
+if {[info exists env(CLOR_DEMO_SNAPSHOT_FILE)]} {
+    set final_snapshot [exec tmux -L $tmux_socket capture-pane -p -e -t 0]
+    set snapshot_handle [open $env(CLOR_DEMO_SNAPSHOT_FILE) w]
+    puts -nonewline $snapshot_handle $final_snapshot
+    close $snapshot_handle
+}
+visible_pause 4000
 close
 wait
 catch {exec tmux -L $tmux_socket kill-server}

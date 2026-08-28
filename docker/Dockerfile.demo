@@ -1,0 +1,24 @@
+FROM python:3.12-slim-bookworm
+
+ARG DEMO_UID=1000
+ARG DEMO_GID=1000
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        asciinema \
+        ca-certificates \
+        curl \
+        expect \
+        procps \
+        tmux \
+    && rm -rf /var/lib/apt/lists/* \
+    && group_name="$(getent group "$DEMO_GID" | cut -d: -f1)" \
+    && if [ -z "$group_name" ]; then group_name=demo; groupadd --gid "$DEMO_GID" "$group_name"; fi \
+    && useradd --uid "$DEMO_UID" --gid "$DEMO_GID" --create-home --shell /bin/bash demo
+
+USER demo
+ENV HOME=/home/demo
+ENV LANG=C.UTF-8
+WORKDIR /workspace
+
+CMD ["bash"]

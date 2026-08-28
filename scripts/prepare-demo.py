@@ -31,7 +31,7 @@ def main() -> int:
         },
         "projects": {
             str(project_dir): {
-                "allowedTools": [],
+                "allowedTools": ["WebFetch(domain:huggingface.co)"],
                 "mcpContextUris": [],
                 "mcpServers": {},
                 "enabledMcpjsonServers": [],
@@ -48,6 +48,7 @@ def main() -> int:
     settings = {
         "autoUpdates": False,
         "effortLevel": "low",
+        "permissions": {"allow": ["WebFetch(domain:huggingface.co)"]},
         "theme": "dark",
     }
     settings_path = config_dir / "settings.json"

@@ -55,6 +55,8 @@ grep -Eq '^sk-or-[^[:space:]]{10,}$' "$demo_key_file" || {
 }
 unset OPENROUTER_API_KEY
 export CLOR_DEMO_KEY_FILE="$demo_key_file"
+export CLOR_DEMO_ROOT="$demo_root"
+export CLOR_DEMO_SNAPSHOT_FILE="$demo_root/demo-final.ansi"
 
 python3 "$script_dir/prepare-demo.py" "$CLAUDE_CONFIG_DIR" "$repo_dir"
 
@@ -70,19 +72,35 @@ CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude auth status --json >/dev/null
 asciinema rec \
   --quiet \
   --overwrite \
-  --cols 110 \
-  --rows 38 \
+    --cols 75 \
+    --rows 24 \
   --idle-time-limit 3 \
-  --title "Claude OpenRouter — curl install to live GLM-5.3-Flash response" \
+  --title "Claude OpenRouter — curl install to live GLM-5.3 response" \
   --command "$script_dir/capture-demo.exp" \
   "$asset_dir/demo.cast"
 
+if grep -Fiq 'did not finish the live Claude response' "$asset_dir/demo.cast"; then
+  echo "demo capture did not finish the live Claude response" >&2
+  exit 1
+fi
+
+stabilize_args=("$asset_dir/demo.cast")
+if [[ -s "$CLOR_DEMO_SNAPSHOT_FILE" ]]; then
+  stabilize_args+=(--snapshot "$CLOR_DEMO_SNAPSHOT_FILE")
+fi
+python3 "$script_dir/stabilize-demo-cast.py" "${stabilize_args[@]}"
 python3 "$script_dir/sanitize-demo-cast.py" \
   "$asset_dir/demo.cast" \
   --secret-file "$demo_key_file"
 python3 "$script_dir/verify-demo-session.py" \
   "$CLAUDE_CONFIG_DIR" \
-  "Hello from GLM-5.3-Flash."
+  "publicly available"
+
+selected_model="$(python3 -c 'import json, sys; print(",".join(json.load(open(sys.argv[1], encoding="utf-8"))["favorites"]))' "$XDG_CONFIG_HOME/claude-openrouter/config.json")"
+if [[ "$selected_model" != "z-ai/glm-5.3" ]]; then
+  echo "demo selected the wrong OpenRouter model: $selected_model" >&2
+  exit 1
+fi
 
 if grep -Eq 'sk-or-[A-Za-z0-9_-]+' "$asset_dir/demo.cast"; then
   echo "refusing to publish a cast containing a key-shaped string" >&2
@@ -92,14 +110,25 @@ if grep -Fq 'connectors are disabled' "$asset_dir/demo.cast"; then
   echo "refusing to publish a demo with Claude.ai connectors disabled" >&2
   exit 1
 fi
+if grep -Fiq 'did not finish the live Claude response' "$asset_dir/demo.cast"; then
+  echo "refusing to publish an incomplete Claude response" >&2
+  exit 1
+fi
+if grep -Eiq 'Interrupted|What should Claude do instead' "$asset_dir/demo.cast"; then
+  echo "refusing to publish an interrupted Claude response" >&2
+  exit 1
+fi
 
 python3 "$script_dir/verify-demo-cast.py" \
   "$asset_dir/demo.cast" \
   'curl -LsSf https://xhluca.github.io/claude-openrouter/install.sh' \
-  'clor search glm-5.3-flash' \
-  'clor select z-ai/glm-5.3-flash' \
+  'OpenRouter API key:' \
+  'choose /model favorites' \
+  'z-ai/glm-5.3' \
+  'Claude OpenRouter is ready' \
   'claude' \
-  'z-ai/glm-5.3-flash' \
-  'Hello from GLM-5.3-Flash.'
+  'GLM 5.3' \
+  'What model powers you' \
+  'weights publicly available'
 
 echo "Captured $asset_dir/demo.cast"

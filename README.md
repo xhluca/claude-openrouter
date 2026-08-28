@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/xhluca/claude-openrouter/main/docs/assets/demo.gif" alt="Installing Claude OpenRouter, searching OpenRouter models, and adding favorites to Claude Code" width="860">
+  <img src="https://raw.githubusercontent.com/xhluca/claude-openrouter/main/docs/assets/demo.gif?v=8" alt="Installing Claude OpenRouter, selecting GLM-5.3, switching models in Claude Code, and verifying its open weights" width="860">
 </p>
 
 Claude OpenRouter is a small, dependency-free CLI and loopback router. It
@@ -214,16 +214,28 @@ local allow rule, and remove it. Do not replace it with a broader wildcard.
 
 ## Demo
 
-The animation above is rendered in real time from an end-to-end asciinema
-capture: the public curl installer, progressively masked key entry, a live
-OpenRouter search for `z-ai/glm-5.3-flash`, exact selection, Claude Code's
-native `/model` picker launched through plain `claude`, and a real model response.
-The scripts verify the saved assistant turn and reject any cast containing the
-credential before publishing it. Sanitization replaces the randomized temporary
-path with `~`; release-only command, settings-path, and version labels may be
-rebased without altering the captured Claude interaction or model response.
+The animation above and the
+[interactive replay](https://xhluca.github.io/claude-openrouter/) come from an
+end-to-end Docker capture: the regular public curl installer, progressively
+masked key entry, interactive search and selection of `z-ai/glm-5.3`, Claude
+Code's native `/model` picker launched through plain `claude`, and the model's
+live answer about its identity and open weights.
 
-[Watch the MP4](https://github.com/xhluca/claude-openrouter/raw/main/docs/assets/demo.mp4)
+The terminal is recorded at 75×24 and rendered at 32 px into a 1480×1110 4:3
+video. The 25-second installation and setup lead-in is compressed to 12 seconds;
+subsequent user and UI actions stay at 1×, while Claude's active fetch/thinking
+interval is accelerated 4× for pacing. `/model` is submitted as one command so
+partial autocomplete redraws do not flash in the video, and capture sanitization
+removes transient expanded-thinking frames without changing the final answer.
+
+The scripts verify the exact saved favorite and assistant turn, then reject any
+cast containing the OpenRouter key or mounted Claude OAuth tokens before
+publishing it. Sanitization also replaces the randomized temporary path with
+`~`; release-only command, settings-path, and version labels may be rebased
+without altering the captured Claude interaction or response.
+
+[Watch the MP4](https://xhluca.github.io/claude-openrouter/assets/demo.mp4?v=8),
+[download the asciicast](https://xhluca.github.io/claude-openrouter/assets/demo.cast?v=8),
 or [reproduce the capture](scripts/render-demo.sh).
 
 ## Development

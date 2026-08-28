@@ -117,22 +117,106 @@ h1 {
   width: min(900px, calc(100vw - 48px));
   margin: 36px 0 30px 50%;
   transform: translateX(-50%);
-}
-
-.demo img {
-  display: block;
-  width: 100%;
-  height: auto;
+  overflow: hidden;
+  background: #0a0c0b;
   border: 1px solid var(--line);
   border-radius: 9px;
   box-shadow: 0 24px 70px rgba(0, 0, 0, .3);
 }
 
-.demo figcaption {
-  margin-top: 10px;
+.demo-topbar {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 10px 8px 14px;
+  background: #171816;
+  border-bottom: 1px solid var(--line);
+}
+
+.demo-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   color: var(--muted);
+  font: 700 10px/1.2 "SFMono-Regular", Consolas, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.demo-label i {
+  width: 7px;
+  height: 7px;
+  background: #57d98b;
+  border-radius: 50%;
+  box-shadow: 0 0 12px rgba(87, 217, 139, .45);
+}
+
+.demo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.demo-controls button {
+  padding: 6px 9px;
+  color: var(--muted);
+  background: #0d0f0e;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: 700 10px/1 "SFMono-Regular", Consolas, monospace;
+  cursor: pointer;
+}
+
+.demo-controls button:hover,
+.demo-controls button:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.demo-controls button[data-demo-action="replay"] {
+  color: #17110f;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.demo-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #0a0c0b;
+}
+
+.demo #demo-player {
+  width: 100%;
+  height: 100%;
+}
+
+.demo .ap-wrapper { border: 0; }
+.demo .ap-player { max-width: none; }
+.demo .ap-terminal { background: #0a0c0b; }
+
+.demo noscript img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.demo figcaption {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--muted);
+  background: #111310;
+  border-top: 1px solid var(--line);
   font: 11px/1.5 "SFMono-Regular", Consolas, monospace;
 }
+
+.demo figcaption [data-demo-status] { color: #57d98b; }
+.demo figcaption a:hover { color: var(--accent); }
 
 .note {
   margin-top: 38px;
@@ -156,4 +240,13 @@ h1 {
   .install code { padding: 6px 4px; }
   .install button { width: 100%; }
   .demo { width: calc(100vw - 28px); }
+  .demo-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .demo-controls {
+    width: 100%;
+    justify-content: stretch;
+  }
+  .demo-controls button { flex: 1; }
 }

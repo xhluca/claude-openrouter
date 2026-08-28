@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -48,11 +49,25 @@ def test_pages_source_keeps_short_installer_and_plain_claude_command() -> None:
     assert "https://xhluca.github.io/claude-openrouter/install.sh" in site
     assert "plain <code>claude</code>" in site
     assert "<code>clor claude</code>" not in site
+    assert "assets/asciinema-player.min.js" in site
+    assert 'data-demo-action="replay"' in site
 
 
 def test_demo_uses_plain_claude_and_current_settings_path() -> None:
     cast = (ROOT / "docs" / "assets" / "demo.cast").read_text(encoding="utf-8")
+    header = json.loads(cast.splitlines()[0])
+
+    assert (header["width"], header["height"]) == (75, 24)
     assert "clor claude" not in cast
     assert "claude-settings.json" not in cast
-    assert "~/.claude/settings.json" in cast
+    assert ".claude/settings.json" in cast
     assert f"claude-openrouter {__version__}" in cast
+    assert "I've verified. Now let me answer briefly." not in cast
+    assert "The user is asking what model powers me" not in cast
+    assert "The user asked two things: what model powers me" not in cast
+
+
+def test_demo_submits_model_command_without_partial_autocomplete_frames() -> None:
+    capture = (ROOT / "scripts" / "capture-demo.exp").read_text(encoding="utf-8")
+    assert 'submit_tui "/model"' in capture
+    assert 'type_tui "/model"' not in capture
