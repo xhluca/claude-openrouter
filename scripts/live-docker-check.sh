@@ -90,7 +90,9 @@ fi
 cp /root/.claude/.credentials.json /tmp/native-credential-before-clor.json
 chmod 0600 /tmp/native-credential-before-clor.json
 
-clor setup --key-stdin --models z-ai/glm-5.3-flash < /run/secrets/openrouter
+clor setup --key-stdin --models \
+  z-ai/glm-5.3-flash '~deepseek/deepseek-v4-flash-latest' \
+  < /run/secrets/openrouter
 cmp /tmp/native-credential-before-clor.json /root/.claude/.credentials.json
 echo NATIVE_CREDENTIAL_UNCHANGED_BY_CLOR
 clor doctor --json > /tmp/doctor.json
@@ -161,6 +163,58 @@ x=json.loads(p.read_text())
 assert x['route'] == 'openrouter', x
 assert x['model'] == 'z-ai/glm-5.3-flash', x
 print('OPENROUTER_GLM_ROUTE_OK')
+PY
+
+python - <<'PY'
+import json
+from pathlib import Path
+manifest=json.loads(Path('/root/.config/claude-openrouter/subagents.json').read_text())
+by_model={entry['model']: name for name, entry in manifest['agents'].items()}
+expected={
+    'clor/openrouter/z-ai/glm-5.3-flash': '/tmp/glm-agent-name',
+    'clor/openrouter/~deepseek/deepseek-v4-flash-latest': '/tmp/deepseek-agent-name',
+}
+assert set(expected) <= set(by_model), by_model
+for model, destination in expected.items():
+    Path(destination).write_text(by_model[model])
+print('OPENROUTER_SUBAGENT_DEFINITIONS_OK')
+PY
+
+glm_agent="$(cat /tmp/glm-agent-name)"
+deepseek_agent="$(cat /tmp/deepseek-agent-name)"
+
+claude -p --model clor/openrouter/z-ai/glm-5.3-flash \
+  --permission-mode bypassPermissions --tools Agent --no-session-persistence \
+  --debug-file /tmp/glm-to-deepseek.log --output-format json \
+  "Invoke the ${deepseek_agent} subagent exactly once. Tell it to reply with exactly CHILD_DEEPSEEK_OK. Deliberately set the Agent model parameter to sonnet; the clor hook must preserve the named subagent's exact model instead. Return its result." \
+  </dev/null > /tmp/glm-to-deepseek.json
+python - <<'PY'
+import json
+x=json.load(open('/tmp/glm-to-deepseek.json'))
+assert not x['is_error'], x
+assert 'CHILD_DEEPSEEK_OK' in x['result'], x['result']
+usage=x['modelUsage']
+assert 'clor/openrouter/z-ai/glm-5.3-flash' in usage, usage
+assert 'clor/openrouter/~deepseek/deepseek-v4-flash-latest' in usage, usage
+assert not any(model.startswith('claude-') for model in usage), usage
+print('GLM_PARENT_TO_DEEPSEEK_SUBAGENT_OK')
+PY
+
+claude -p --model 'clor/openrouter/~deepseek/deepseek-v4-flash-latest' \
+  --permission-mode bypassPermissions --tools Agent --no-session-persistence \
+  --debug-file /tmp/deepseek-to-glm.log --output-format json \
+  "Invoke the ${glm_agent} subagent exactly once. Tell it to reply with exactly CHILD_GLM_OK. Deliberately set the Agent model parameter to sonnet; the clor hook must preserve the named subagent's exact model instead. Return its result." \
+  </dev/null > /tmp/deepseek-to-glm.json
+python - <<'PY'
+import json
+x=json.load(open('/tmp/deepseek-to-glm.json'))
+assert not x['is_error'], x
+assert 'CHILD_GLM_OK' in x['result'], x['result']
+usage=x['modelUsage']
+assert 'clor/openrouter/~deepseek/deepseek-v4-flash-latest' in usage, usage
+assert 'clor/openrouter/z-ai/glm-5.3-flash' in usage, usage
+assert not any(model.startswith('claude-') for model in usage), usage
+print('DEEPSEEK_PARENT_TO_GLM_SUBAGENT_OK')
 PY
 
 expect <<'EXPECT' > /dev/null

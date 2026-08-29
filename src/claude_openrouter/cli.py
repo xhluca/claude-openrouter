@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .agents import run_agent_hook
 from .anthropic import (
     read_anthropic_credential,
     validate_anthropic_key_shape,
@@ -561,6 +562,8 @@ def command_uninstall() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    if raw_arguments == ["_agent-hook"]:
+        return run_agent_hook()
     if raw_arguments[:1] == ["claude"]:
         args = parser().parse_args(["claude"])
         args.claude_args = raw_arguments[1:]

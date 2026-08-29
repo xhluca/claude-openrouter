@@ -32,6 +32,10 @@ def claude_settings_path() -> Path:
     return claude_config_dir() / "settings.json"
 
 
+def claude_agents_dir() -> Path:
+    return claude_config_dir() / "agents"
+
+
 def credential_path() -> Path:
     return config_dir() / "credential"
 
@@ -54,6 +58,10 @@ def helper_path() -> Path:
 
 def preferences_path() -> Path:
     return config_dir() / "config.json"
+
+
+def agent_manifest_path() -> Path:
+    return config_dir() / "subagents.json"
 
 
 def catalog_path() -> Path:

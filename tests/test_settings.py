@@ -8,7 +8,9 @@ from conftest import write_json
 
 from claude_openrouter.openrouter import write_credential
 from claude_openrouter.paths import (
+    agent_manifest_path,
     backup_path,
+    claude_agents_dir,
     claude_settings_path,
     config_dir,
     helper_path,
@@ -19,6 +21,7 @@ from claude_openrouter.settings import (
     BASE_URL,
     configure_claude,
     refresh_claude_credential,
+    refresh_managed_subagents,
     reset_integration,
     restore_claude_settings,
     write_key_helper,
@@ -123,13 +126,19 @@ def test_configure_makes_plain_claude_use_openrouter_and_preserves_native_auth(
         "clor/openrouter/google/gemini-3.1-pro-preview",
         "clor/openrouter/qwen/qwen3-coder",
     ]
+    pre_tool_use = settings["hooks"]["PreToolUse"]
+    assert any(group.get("matcher") == "Agent" for group in pre_tool_use)
+    assert len(list(claude_agents_dir().glob("clor-*.md"))) == 2
+    assert agent_manifest_path().exists()
     assert stat.S_IMODE(claude_settings_path().stat().st_mode) == 0o600
-    assert read_json(backup_path())["version"] == 3
+    assert read_json(backup_path())["version"] == 4
     assert not launch_settings_path().exists()
     assert not helper_path().exists()
 
     assert reset_integration() is True
     assert read_json(claude_settings_path()) == original
+    assert not agent_manifest_path().exists()
+    assert not claude_agents_dir().exists()
 
 
 def test_reconfigure_keeps_original_backup_and_does_not_duplicate_authorization(
@@ -153,6 +162,80 @@ def test_reconfigure_keeps_original_backup_and_does_not_duplicate_authorization(
     )
 
     reset_integration()
+    assert read_json(claude_settings_path()) == original
+
+
+def test_router_startup_upgrades_v3_backup_before_adding_subagent_hook(
+    isolated_home, sample_models
+) -> None:
+    original = {
+        "theme": "dark",
+        "model": "sonnet",
+        "hooks": {
+            "Notification": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": "notify"}]}
+            ]
+        },
+    }
+    current = {
+        **original,
+        "model": "clor/openrouter/google/gemini-3.1-pro-preview",
+        "modelPicker": {
+            "replaceBuiltInOptions": False,
+            "options": [
+                {
+                    "model": "clor/openrouter/google/gemini-3.1-pro-preview",
+                    "description": "OpenRouter via claude-openrouter",
+                }
+            ],
+        },
+        "env": {
+            "ANTHROPIC_BASE_URL": BASE_URL,
+            "ANTHROPIC_API_KEY": "",
+            "ANTHROPIC_AUTH_TOKEN": "",
+            "ANTHROPIC_CUSTOM_HEADERS": "X-Claude-OpenRouter-Token: old",
+            "ENABLE_TOOL_SEARCH": "false",
+        },
+    }
+    write_json(claude_settings_path(), current)
+
+    def snapshot(document, field):
+        return (
+            {"present": True, "value": document[field]}
+            if field in document
+            else {"present": False}
+        )
+
+    write_json(
+        backup_path(),
+        {
+            "version": 3,
+            "settings_path": str(claude_settings_path()),
+            "settings_existed": True,
+            "root": {
+                field: snapshot(original, field)
+                for field in ("apiKeyHelper", "modelPicker", "model")
+            },
+            "env_was_object": False,
+            "env": {
+                field: {"present": False}
+                for field in (
+                    "ANTHROPIC_BASE_URL",
+                    "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "ANTHROPIC_CUSTOM_HEADERS",
+                    "ENABLE_TOOL_SEARCH",
+                )
+            },
+        },
+    )
+
+    refresh_managed_subagents(sample_models[2:3])
+
+    backup = read_json(backup_path())
+    assert backup["version"] == 4
+    assert backup["root"]["hooks"] == {"present": True, "value": original["hooks"]}
+    assert restore_claude_settings() is True
     assert read_json(claude_settings_path()) == original
 
 
@@ -245,7 +328,7 @@ def test_configure_migrates_legacy_global_settings_from_backup(
         ),
         "ENABLE_TOOL_SEARCH": "false",
     }
-    assert read_json(backup_path())["version"] == 3
+    assert read_json(backup_path())["version"] == 4
     assert not helper_path().exists()
 
     reset_integration()

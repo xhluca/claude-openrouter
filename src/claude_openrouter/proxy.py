@@ -17,12 +17,13 @@ from .anthropic import read_anthropic_credential
 from .models import (
     OPENROUTER_MODEL_PREFIX,
     catalog_input_modalities,
+    exact_models,
     hybrid_openrouter_allowed,
     original_model,
 )
 from .openrouter import load_catalog, read_credential
 from .paths import router_status_path, router_token_path
-from .settings import favorite_ids, load_preferences
+from .settings import favorite_ids, load_preferences, refresh_managed_subagents
 from .storage import atomic_write_json
 
 DEFAULT_HOST = "127.0.0.1"
@@ -404,12 +405,18 @@ def run_router(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     auth = preferences.get("anthropic_auth", "max")
     if not isinstance(auth, str):
         raise RuntimeError("invalid anthropic_auth preference")
+    favorites = favorite_ids()
+    catalog = load_catalog()
+    # The newly installed router is the first new-version process started by
+    # ``clor update``. Refreshing here upgrades existing 0.4.x installations
+    # without requiring users to rerun setup or select.
+    refresh_managed_subagents(exact_models(catalog, favorites))
     server = HybridRouterServer(
         (host, port),
         local_token=read_router_token(),
-        favorites=set(favorite_ids()),
+        favorites=set(favorites),
         anthropic_auth=auth,
-        model_modalities=catalog_input_modalities(load_catalog()),
+        model_modalities=catalog_input_modalities(catalog),
     )
     try:
         server.serve_forever()

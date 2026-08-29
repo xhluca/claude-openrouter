@@ -109,6 +109,15 @@ the provider shown in the row. Every local Claude Code entry point reads the
 same settings, including `claude --continue`, `claude --agent NAME`, background
 agents, and the `claude agents` view.
 
+Each OpenRouter favorite is also installed as a user-level Claude Code
+subagent. This matters because Claude Code's per-invocation `Agent.model` field
+only accepts the native `sonnet`, `opus`, and `haiku` aliases, while custom
+subagent definitions accept a full model ID. Ask the parent to delegate to the
+named OpenRouter favorite (or select the generated `clor-*` agent in Claude
+Code), and the child uses that exact favorite. A scoped `PreToolUse` hook strips
+an accidental native alias override only for clor-managed subagents; ordinary
+Claude subagents and `inherit` behavior are untouched.
+
 | `/model` choice | Upstream | Billing credential |
 | --- | --- | --- |
 | Built-in Opus, Sonnet, or Haiku | Anthropic | Claude Max OAuth by default |
@@ -182,12 +191,16 @@ Claude Code ─► 127.0.0.1 router ────┤
   service manager use a detached process for the container lifetime.
 - Adds the local endpoint, a random local-service token, and OpenRouter picker
   rows to `~/.claude/settings.json`. Provider API keys never appear there.
+- Creates one marked `~/.claude/agents/clor-*.md` definition per favorite and a
+  scoped Agent hook so GLM can delegate to DeepSeek, DeepSeek can delegate to
+  GLM, and other selected OpenRouter combinations keep their exact child model.
 - Does not set `ANTHROPIC_API_KEY` or `apiKeyHelper` when a native login exists.
 - Strips OAuth and Anthropic keys before OpenRouter requests, strips the
   OpenRouter key before Anthropic requests, and allows only selected
   OpenRouter model IDs.
 - Saves the fields it replaces in a private, versioned backup and restores them
-  exactly with `clor reset` or `clor uninstall`.
+  exactly with `clor reset` or `clor uninstall`; generated subagent files and
+  the scoped hook are removed at the same time.
 - Migrates settings created by older claude-openrouter releases automatically
   the next time setup or selection runs.
 
@@ -260,7 +273,8 @@ scripts/live-docker-check.sh /path/to/openrouter-key ~/.claude
 
 The Docker check mounts temporary copies of Claude OAuth state and the key only
 at runtime. It makes live, billable Max and OpenRouter calls, dispatches a GLM
-5.3 Flash background agent, and launches the real `claude agents` terminal UI.
+5.3 Flash background agent, verifies GLM-to-DeepSeek and DeepSeek-to-GLM child
+dispatches, and launches the real `claude agents` terminal UI.
 
 ## License
 

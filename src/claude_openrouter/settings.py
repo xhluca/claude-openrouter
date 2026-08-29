@@ -8,6 +8,12 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from .agents import (
+    is_managed_hook_group,
+    managed_hook_group,
+    remove_managed_agents,
+    sync_managed_agents,
+)
 from .models import hybrid_openrouter_allowed, namespaced_model, picker_row
 from .paths import (
     anthropic_credential_path,
@@ -27,11 +33,12 @@ from .storage import atomic_write_json, atomic_write_text, read_json_object
 LEGACY_BASE_URL = "https://openrouter.ai/api"
 DEFAULT_ROUTER_PORT = 9417
 BASE_URL = f"http://127.0.0.1:{DEFAULT_ROUTER_PORT}"
-ROOT_FIELDS = ("apiKeyHelper", "modelPicker", "model")
+LEGACY_ROOT_FIELDS = ("apiKeyHelper", "modelPicker", "model")
+ROOT_FIELDS = (*LEGACY_ROOT_FIELDS, "hooks")
 LEGACY_ENV_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 VERSION_2_ENV_FIELDS = (*LEGACY_ENV_FIELDS, "ANTHROPIC_CUSTOM_HEADERS")
 ENV_FIELDS = (*VERSION_2_ENV_FIELDS, "ENABLE_TOOL_SEARCH")
-BACKUP_VERSION = 3
+BACKUP_VERSION = 4
 LOCAL_TOKEN_HEADER = "X-Claude-OpenRouter-Token"
 
 
@@ -50,6 +57,13 @@ def _capture_backup(settings: dict[str, Any], existed: bool) -> None:
                 "an existing claude-openrouter backup belongs to a different "
                 "CLAUDE_CONFIG_DIR; reset it from that environment first"
             )
+        if backup.get("version") == 3:
+            root = backup.get("root")
+            if not isinstance(root, dict):
+                raise RuntimeError(f"invalid settings backup at {path}")
+            root["hooks"] = _field_snapshot(settings, "hooks")
+            backup["version"] = BACKUP_VERSION
+            atomic_write_json(path, backup)
         return
     env = settings.get("env")
     env_object = env if isinstance(env, dict) else {}
@@ -148,7 +162,72 @@ def _active_backup() -> bool:
     path = backup_path()
     if not path.exists():
         return False
-    return read_json_object(path).get("version") == BACKUP_VERSION
+    return read_json_object(path).get("version") in {3, BACKUP_VERSION}
+
+
+def _install_managed_agent_hook(settings: dict[str, Any]) -> None:
+    configured = settings.get("hooks")
+    if configured is None:
+        hooks: dict[str, Any] = {}
+    elif isinstance(configured, dict):
+        hooks = dict(configured)
+    else:
+        raise RuntimeError("the hooks setting in Claude Code settings must be a JSON object")
+    configured_pre = hooks.get("PreToolUse")
+    if configured_pre is None:
+        pre_tool_use: list[Any] = []
+    elif isinstance(configured_pre, list):
+        pre_tool_use = list(configured_pre)
+    else:
+        raise RuntimeError("hooks.PreToolUse in Claude Code settings must be a JSON array")
+    pre_tool_use = [group for group in pre_tool_use if not is_managed_hook_group(group)]
+    pre_tool_use.append(managed_hook_group())
+    hooks["PreToolUse"] = pre_tool_use
+    settings["hooks"] = hooks
+
+
+def _remove_managed_agent_hook(settings: dict[str, Any]) -> bool:
+    configured = settings.get("hooks")
+    if not isinstance(configured, dict):
+        return False
+    hooks = dict(configured)
+    configured_pre = hooks.get("PreToolUse")
+    if not isinstance(configured_pre, list):
+        return False
+    pre_tool_use = [group for group in configured_pre if not is_managed_hook_group(group)]
+    if len(pre_tool_use) == len(configured_pre):
+        return False
+    if pre_tool_use:
+        hooks["PreToolUse"] = pre_tool_use
+    else:
+        hooks.pop("PreToolUse", None)
+    if hooks:
+        settings["hooks"] = hooks
+    else:
+        settings.pop("hooks", None)
+    return True
+
+
+def _has_managed_agent_hook(settings: dict[str, Any]) -> bool:
+    configured = settings.get("hooks")
+    if not isinstance(configured, dict):
+        return False
+    pre_tool_use = configured.get("PreToolUse")
+    return isinstance(pre_tool_use, list) and any(
+        is_managed_hook_group(group) for group in pre_tool_use
+    )
+
+
+def refresh_managed_subagents(models: list[dict[str, Any]]) -> Path:
+    """Refresh custom agent files and their exact-model guard after package updates."""
+    path = claude_settings_path()
+    existed = path.exists()
+    settings = read_json_object(path, missing_ok=True)
+    _capture_backup(settings, existed)
+    sync_managed_agents(models)
+    _install_managed_agent_hook(settings)
+    atomic_write_json(path, settings)
+    return path
 
 
 def configure_claude(
@@ -225,6 +304,8 @@ def configure_claude(
         "replaceBuiltInOptions": False,
     }
     settings["model"] = default_model
+    sync_managed_agents(models)
+    _install_managed_agent_hook(settings)
     atomic_write_json(path, settings)
     launch_settings_path().unlink(missing_ok=True)
     helper_path().unlink(missing_ok=True)
@@ -271,6 +352,7 @@ def _looks_managed_picker(value: Any) -> bool:
 def restore_claude_settings() -> bool:
     path = claude_settings_path()
     if not path.exists():
+        remove_managed_agents()
         return False
     settings = read_json_object(path)
     backup_file = backup_path()
@@ -285,7 +367,8 @@ def restore_claude_settings() -> bool:
         env_backup = backup.get("env")
         if not isinstance(root, dict) or not isinstance(env_backup, dict):
             raise RuntimeError(f"invalid settings backup at {backup_file}")
-        for field in ROOT_FIELDS:
+        root_fields = ROOT_FIELDS if backup.get("version", 1) >= 4 else LEGACY_ROOT_FIELDS
+        for field in root_fields:
             snapshot = root.get(field)
             if not isinstance(snapshot, dict):
                 raise RuntimeError(f"invalid settings backup field {field}")
@@ -327,6 +410,7 @@ def restore_claude_settings() -> bool:
             and LOCAL_TOKEN_HEADER.casefold()
             in env["ANTHROPIC_CUSTOM_HEADERS"].casefold()
         )
+        managed_hook = _remove_managed_agent_hook(settings)
         managed_base = isinstance(env, dict) and (
             env.get("ANTHROPIC_BASE_URL") == LEGACY_BASE_URL
             or (
@@ -334,7 +418,8 @@ def restore_claude_settings() -> bool:
                 and (managed_picker or managed_headers)
             )
         )
-        if not (managed_helper or managed_picker or managed_base):
+        if not (managed_helper or managed_picker or managed_base or managed_hook):
+            remove_managed_agents()
             return False
         if managed_helper:
             settings.pop("apiKeyHelper", None)
@@ -368,6 +453,7 @@ def restore_claude_settings() -> bool:
         atomic_write_json(path, settings)
     else:
         path.unlink()
+    remove_managed_agents()
     return True
 
 
@@ -388,6 +474,7 @@ def migrate_legacy_settings() -> bool:
         legacy_present = (
             settings.get("apiKeyHelper") == str(helper_path().resolve())
             or _looks_managed_picker(settings.get("modelPicker"))
+            or _has_managed_agent_hook(settings)
             or (
                 isinstance(env, dict)
                 and (
