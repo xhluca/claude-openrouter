@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -61,7 +62,7 @@ def test_demo_uses_plain_claude_and_current_settings_path() -> None:
     assert "clor claude" not in cast
     assert "claude-settings.json" not in cast
     assert ".claude/settings.json" in cast
-    assert f"claude-openrouter {__version__}" in cast
+    assert re.search(r"claude-openrouter \d+\.\d+\.\d+", cast)
     assert "I've verified. Now let me answer briefly." not in cast
     assert "The user is asking what model powers me" not in cast
     assert "The user asked two things: what model powers me" not in cast

@@ -4,10 +4,10 @@
 set -eu
 
 package_name="claude-openrouter"
-package_version="0.4.0"
+package_version="0.4.1"
 wheel_name="claude_openrouter-${package_version}-py3-none-any.whl"
 # Filled from the release artifact by scripts/build-release.sh.
-wheel_sha256="9f6190b43dcb1ba820baceb03927041328e871e3b77271a6341447c6ffe5f55c"
+wheel_sha256="b463763f1b7e08a8f0ec62c0776300a9161a3dc6864ca5d36af17f9d7d44a4f0"
 pypi_index_url="${CLAUDE_OPENROUTER_PYPI_INDEX_URL:-https://pypi.org/simple}"
 release_base_url="${CLAUDE_OPENROUTER_INSTALL_BASE_URL:-https://xhluca.github.io/claude-openrouter/releases/${package_version}}"
 package_spec="${package_name}==${package_version}"

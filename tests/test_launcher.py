@@ -63,3 +63,44 @@ def test_native_login_check_ignores_user_routing_settings(monkeypatch) -> None:
         "--json",
     ]
     assert "ANTHROPIC_AUTH_TOKEN" not in captured["environment"]
+
+
+@pytest.mark.parametrize("auth_method", ["claude.ai", "oauth_token"])
+def test_native_login_accepts_first_party_oauth_methods(monkeypatch, auth_method) -> None:
+    class Result:
+        returncode = 0
+        stdout = json.dumps(
+            {
+                "loggedIn": True,
+                "authMethod": auth_method,
+                "apiProvider": "firstParty",
+                "subscriptionType": "max",
+            }
+        )
+
+    monkeypatch.setattr(launcher, "find_claude", lambda: "/bin/claude")
+    monkeypatch.setattr(launcher.subprocess, "run", lambda *_args, **_kwargs: Result())
+
+    assert launcher.has_native_login() is True
+
+
+@pytest.mark.parametrize(
+    ("status", "returncode"),
+    [
+        ({"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"}, 0),
+        ({"loggedIn": True, "authMethod": "api_key", "apiProvider": "firstParty"}, 0),
+        ({"loggedIn": True, "authMethod": "oauth_token", "apiProvider": "bedrock"}, 0),
+        ({"loggedIn": True, "authMethod": "oauth_token", "apiProvider": "firstParty"}, 1),
+    ],
+)
+def test_native_login_rejects_non_native_auth(monkeypatch, status, returncode) -> None:
+    class Result:
+        pass
+
+    result = Result()
+    result.returncode = returncode
+    result.stdout = json.dumps(status)
+    monkeypatch.setattr(launcher, "find_claude", lambda: "/bin/claude")
+    monkeypatch.setattr(launcher.subprocess, "run", lambda *_args, **_kwargs: result)
+
+    assert launcher.has_native_login() is False

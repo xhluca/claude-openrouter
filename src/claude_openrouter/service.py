@@ -25,6 +25,8 @@ from .proxy import DEFAULT_PORT, LOCAL_TOKEN_HEADER, router_base_url
 from .storage import atomic_write_text, ensure_private_dir
 
 SERVICE_MARKER = "Managed by claude-openrouter hybrid routing"
+LAUNCHD_LABEL = "io.github.xhluca.claude-openrouter"
+STARTUP_TIMEOUT_SECONDS = 30.0
 
 
 def ensure_router_token() -> Path:
@@ -35,6 +37,15 @@ def ensure_router_token() -> Path:
 
 
 def _serve_command(port: int) -> list[str]:
+    # uv can prepend an ephemeral build environment while a tool updates itself.
+    # Persist the user-facing shim path in service definitions so the next uv
+    # install can replace its target without leaving systemd/launchd pointing at
+    # a deleted temporary directory.
+    user_bin = Path(os.environ.get("XDG_BIN_HOME", Path.home() / ".local" / "bin"))
+    for name in ("clor", "claude-openrouter"):
+        shim = user_bin / name
+        if shim.exists():
+            return [str(shim), "serve", "--port", str(port)]
     executable = shutil.which("clor") or shutil.which("claude-openrouter")
     if executable:
         return [executable, "serve", "--port", str(port)]
@@ -103,12 +114,49 @@ WantedBy=default.target
     return "systemd user service"
 
 
+def _launchd_domains() -> tuple[str, str]:
+    uid = os.getuid()
+    return (f"gui/{uid}", f"user/{uid}")
+
+
+def _launchd_domain() -> str:
+    launchctl = shutil.which("launchctl")
+    assert launchctl is not None
+    for domain in _launchd_domains():
+        result = subprocess.run(
+            [launchctl, "print", domain],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return domain
+    raise RuntimeError("could not find a launchd user domain for the hybrid router")
+
+
+def _stop_launchd_jobs() -> bool:
+    launchctl = shutil.which("launchctl")
+    if not launchctl:
+        return False
+    stopped = False
+    for domain in _launchd_domains():
+        result = subprocess.run(
+            [launchctl, "bootout", f"{domain}/{LAUNCHD_LABEL}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        stopped = result.returncode == 0 or stopped
+    return stopped
+
+
 def _start_launchd(port: int) -> str:
     plist = launchd_plist_path()
     ensure_private_dir(plist.parent)
     ensure_private_dir(router_log_path().parent)
+    atomic_write_text(router_log_path(), "", 0o600)
     document = {
-        "Label": "io.github.xhluca.claude-openrouter",
+        "Label": LAUNCHD_LABEL,
         "ProgramArguments": _serve_command(port),
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
@@ -117,12 +165,19 @@ def _start_launchd(port: int) -> str:
         "StandardErrorPath": str(router_log_path()),
     }
     atomic_write_text(plist, plistlib.dumps(document).decode(), 0o600)
-    subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+    launchctl = shutil.which("launchctl")
+    assert launchctl is not None
+    domain = _launchd_domain()
+    _stop_launchd_jobs()
     result = subprocess.run(
-        ["launchctl", "load", str(plist)], capture_output=True, text=True, check=False
+        [launchctl, "bootstrap", domain, str(plist)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"could not start the launchd service: {result.stderr.strip()}")
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"could not start the launchd service: {detail}")
     return "launchd user service"
 
 
@@ -198,6 +253,17 @@ def _start_fallback(port: int) -> str:
     return f"detached user process {process.pid}"
 
 
+def _router_log_tail(limit: int = 4096) -> str:
+    try:
+        with router_log_path().open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            return handle.read().decode(errors="replace").strip()
+    except OSError:
+        return ""
+
+
 def start_service(port: int = DEFAULT_PORT) -> str:
     if not 1 <= port <= 65535:
         raise ValueError("router port must be between 1 and 65535")
@@ -208,12 +274,17 @@ def start_service(port: int = DEFAULT_PORT) -> str:
         mechanism = _start_systemd(port)
     else:
         mechanism = _start_fallback(port)
-    for _ in range(60):
+    deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
         if healthcheck(port, timeout=0.2):
             return mechanism
         time.sleep(0.1)
+    detail = _router_log_tail()
     stop_service()
-    raise RuntimeError(f"hybrid router did not become healthy on {router_base_url(port)}")
+    message = f"hybrid router did not become healthy on {router_base_url(port)}"
+    if detail:
+        message += f"; router log: {detail}"
+    raise RuntimeError(message)
 
 
 def stop_service() -> bool:
@@ -237,10 +308,9 @@ def stop_service() -> bool:
     plist = launchd_plist_path()
     if plist.exists():
         content = plist.read_text(encoding="utf-8", errors="replace")
-        if "io.github.xhluca.claude-openrouter" not in content:
+        if LAUNCHD_LABEL not in content:
             raise RuntimeError(f"refusing to remove unrecognized launchd plist: {plist}")
-        if shutil.which("launchctl"):
-            subprocess.run(["launchctl", "unload", str(plist)], capture_output=True, check=False)
+        _stop_launchd_jobs()
         plist.unlink()
         stopped = True
     return _stop_fallback() or stopped

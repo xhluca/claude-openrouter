@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from claude_openrouter.models import exact_models, picker_row, search_models
+from claude_openrouter.models import (
+    catalog_input_modalities,
+    exact_models,
+    input_modalities,
+    picker_row,
+    search_models,
+)
 
 
 def ids(models: list[dict[str, object]]) -> list[str]:
@@ -58,3 +64,24 @@ def test_picker_row_has_human_metadata_and_management_marker(sample_models) -> N
     assert row["label"] == "Claude Sonnet 4.6"
     assert "OpenRouter via claude-openrouter" in row["description"]
     assert "$3/M input" in row["description"]
+
+
+def test_catalog_input_modalities_uses_exact_ids_and_skips_unknown_metadata() -> None:
+    models = [
+        {
+            "id": "text/model",
+            "architecture": {"input_modalities": ["Text"]},
+        },
+        {
+            "id": "vision/model",
+            "architecture": {"input_modalities": ["text", "IMAGE", "video"]},
+        },
+        {"id": "unknown/model"},
+    ]
+
+    assert input_modalities(models[0]) == frozenset({"text"})
+    assert input_modalities(models[2]) is None
+    assert catalog_input_modalities(models) == {
+        "text/model": frozenset({"text"}),
+        "vision/model": frozenset({"text", "image", "video"}),
+    }

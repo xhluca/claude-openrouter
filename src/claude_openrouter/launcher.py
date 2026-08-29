@@ -9,6 +9,8 @@ import subprocess
 from pathlib import Path
 from typing import NoReturn
 
+NATIVE_AUTH_METHODS = {"claude.ai", "oauth_token"}
+
 
 def find_claude() -> str:
     executable = shutil.which("claude")
@@ -52,7 +54,8 @@ def has_native_login() -> bool:
         result.returncode == 0
         and isinstance(status, dict)
         and status.get("loggedIn") is True
-        and status.get("authMethod") == "claude.ai"
+        and status.get("authMethod") in NATIVE_AUTH_METHODS
+        and status.get("apiProvider", "firstParty") == "firstParty"
     )
 
 

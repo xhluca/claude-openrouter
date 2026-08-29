@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -14,6 +15,7 @@ from claude_openrouter.proxy import (
     LOCAL_TOKEN_HEADER,
     HybridRouterServer,
     classify_model,
+    route_payload,
 )
 from claude_openrouter.storage import atomic_write_text
 
@@ -21,6 +23,7 @@ OPENROUTER_KEY = "sk-or-v1-this-is-a-fake-test-key"
 ANTHROPIC_KEY = "sk-ant-this-is-a-fake-test-key"
 LOCAL_TOKEN = "local-router-test-token"
 GLM = "z-ai/glm-5.3-flash"
+DEEPSEEK = "~deepseek/deepseek-v4-flash-latest"
 STREAM_FIRST = b"data: first\n\n"
 STREAM_SECOND = b"data: second\n\n"
 
@@ -191,6 +194,9 @@ def test_unknown_and_unfavorited_models_fail_closed(routing_servers) -> None:
         with pytest.raises(urllib.error.HTTPError) as rejected:
             request(routing_servers, model)
         assert rejected.value.code == 400
+        payload = json.loads(rejected.value.read())
+        assert payload["type"] == "error"
+        assert payload["error"]["type"] == "invalid_request_error"
     assert RecordingUpstream.requests == []
 
 
@@ -217,10 +223,30 @@ def test_healthcheck_requires_local_token(routing_servers) -> None:
     with pytest.raises(urllib.error.HTTPError) as rejected:
         urllib.request.urlopen(url, timeout=3)
     assert rejected.value.code == 401
+    payload = json.loads(rejected.value.read())
+    assert payload["error"]["type"] == "authentication_error"
     with urllib.request.urlopen(
         urllib.request.Request(url, headers={LOCAL_TOKEN_HEADER: LOCAL_TOKEN}), timeout=3
     ) as response:
         assert response.status == 200
+
+
+def test_router_bind_does_not_wait_for_reverse_dns(isolated_home, monkeypatch) -> None:
+    def fail_getfqdn(_host: str) -> str:
+        raise AssertionError("router bind must not perform reverse DNS")
+
+    monkeypatch.setattr(socket, "getfqdn", fail_getfqdn)
+    router = HybridRouterServer(
+        ("127.0.0.1", 0),
+        local_token=LOCAL_TOKEN,
+        favorites={GLM},
+        anthropic_auth="max",
+    )
+    try:
+        assert router.server_name == "127.0.0.1"
+        assert router.server_port > 0
+    finally:
+        router.server_close()
 
 
 def test_model_classification_is_explicit() -> None:
@@ -230,3 +256,118 @@ def test_model_classification_is_explicit() -> None:
         classify_model(GLM, {GLM})
     with pytest.raises(ValueError, match="blocked on the OpenRouter route"):
         classify_model("clor/openrouter/anthropic/claude-opus-5", {"anthropic/claude-opus-5"})
+
+
+def test_text_only_model_receives_capability_notice_and_failed_image_tool_result() -> None:
+    image_data = "must-not-reach-openrouter"
+    payload = {
+        "model": f"clor/openrouter/{DEEPSEEK}",
+        "system": [{"type": "text", "text": "You are a coding agent."}],
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_read_image",
+                        "name": "Read",
+                        "input": {"file_path": "/tmp/image.jpg"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_read_image",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": image_data,
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+    }
+    route, model, body = route_payload(
+        json.dumps(payload).encode(),
+        {DEEPSEEK, GLM},
+        {DEEPSEEK: frozenset({"text"}), GLM: frozenset({"text", "image", "video"})},
+    )
+    routed = json.loads(body)
+
+    assert (route, model, routed["model"]) == ("openrouter", DEEPSEEK, DEEPSEEK)
+    assert image_data not in body.decode()
+    notice = routed["system"][-1]["text"]
+    assert "text-only" in notice
+    assert "cannot inspect image pixels" in notice
+    tool_result = routed["messages"][-1]["content"][0]
+    assert tool_result["is_error"] is True
+    assert tool_result["tool_use_id"] == "toolu_read_image"
+    error = tool_result["content"][0]["text"]
+    assert "ToolError[unsupported_input_modality]" in error
+    assert "Do not retry" in error
+    assert GLM in error
+
+
+def test_text_only_model_replaces_direct_image_with_categorized_input_error() -> None:
+    payload = {
+        "model": f"clor/openrouter/{DEEPSEEK}",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": "abc"},
+                    },
+                ],
+            }
+        ],
+    }
+    _, _, body = route_payload(
+        json.dumps(payload).encode(),
+        {DEEPSEEK},
+        {DEEPSEEK: frozenset({"text"})},
+    )
+    routed = json.loads(body)
+    replacement = routed["messages"][0]["content"][1]
+
+    assert replacement["type"] == "text"
+    assert "InputError[unsupported_input_modality]" in replacement["text"]
+    assert '"data":"abc"' not in body.decode()
+
+
+def test_vision_model_keeps_image_payload_unchanged() -> None:
+    payload = {
+        "model": f"clor/openrouter/{GLM}",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": "abc"},
+                    }
+                ],
+            }
+        ],
+    }
+    _, _, body = route_payload(
+        json.dumps(payload).encode(),
+        {GLM},
+        {GLM: frozenset({"text", "image", "video"})},
+    )
+    routed = json.loads(body)
+
+    assert routed["messages"][0]["content"][0]["type"] == "image"
+    assert routed["messages"][0]["content"][0]["source"]["data"] == "abc"
+    assert "system" not in routed

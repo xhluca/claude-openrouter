@@ -138,6 +138,16 @@ Deferred tool loading is disabled because non-Anthropic OpenRouter models
 reject that Anthropic-specific protocol; connector tools remain available and
 are loaded eagerly instead. This is required for GLM in `claude agents`.
 
+Image support follows the live OpenRouter catalog rather than assumptions about
+model names. When `architecture.input_modalities` marks a favorite as text-only,
+the router tells the agent that it cannot inspect images before it chooses a
+tool. If Claude Code still returns image content from `Read`, the router removes
+the image bytes and substitutes a categorized
+`ToolError[unsupported_input_modality]` result. The agent can then explain the
+actual limitation and suggest a vision-capable `/model` favorite instead of
+showing Claude Code's generic model-access error. Image inputs pass through
+unchanged for models whose catalog metadata includes `image`.
+
 ## Commands
 
 | Command | Purpose |

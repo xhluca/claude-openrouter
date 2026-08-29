@@ -9,12 +9,18 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Any
 from urllib.parse import urlsplit
 
 from .anthropic import read_anthropic_credential
-from .models import OPENROUTER_MODEL_PREFIX, hybrid_openrouter_allowed, original_model
-from .openrouter import read_credential
+from .models import (
+    OPENROUTER_MODEL_PREFIX,
+    catalog_input_modalities,
+    hybrid_openrouter_allowed,
+    original_model,
+)
+from .openrouter import load_catalog, read_credential
 from .paths import router_status_path, router_token_path
 from .settings import favorite_ids, load_preferences
 from .storage import atomic_write_json
@@ -36,6 +42,102 @@ HOP_BY_HOP = {
     "transfer-encoding",
     "upgrade",
 }
+
+CAPABILITY_ERROR = "unsupported_input_modality"
+
+
+def _vision_hint(favorites: set[str], model_modalities: dict[str, frozenset[str]]) -> str:
+    vision_favorites = sorted(
+        model_id for model_id in favorites if "image" in model_modalities.get(model_id, frozenset())
+    )
+    if not vision_favorites:
+        return "Use /model to switch to a vision-capable model, then retry."
+    examples = ", ".join(vision_favorites[:3])
+    label = "favorite" if len(vision_favorites) == 1 else "favorites"
+    return f"Use /model to switch to a vision-capable {label} such as {examples}, then retry."
+
+
+def _capability_notice(model: str, vision_hint: str) -> str:
+    return (
+        "Claude OpenRouter capability notice: the selected model "
+        f"{model} is text-only; OpenRouter's catalog does not list image as an input "
+        "modality. You cannot inspect image pixels with this model. Do not claim that "
+        "you viewed an image or repeatedly call a tool to read one. If the user asks "
+        f"you to inspect an image, explain this limitation. {vision_hint}"
+    )
+
+
+def _tool_capability_error(model: str, vision_hint: str) -> str:
+    return (
+        f"ToolError[{CAPABILITY_ERROR}]: the Read tool returned image content, but the "
+        f"selected OpenRouter model {model} is text-only. The image was not sent to the "
+        "model. Do not retry reading this image with the current model. Explain that this "
+        f"model cannot inspect images. {vision_hint}"
+    )
+
+
+def _input_capability_error(model: str, vision_hint: str) -> str:
+    return (
+        f"InputError[{CAPABILITY_ERROR}]: an image was supplied, but the selected "
+        f"OpenRouter model {model} is text-only. The image was not sent to the model. "
+        f"Explain that this model cannot inspect images. {vision_hint}"
+    )
+
+
+def _contains_image(content: Any) -> bool:
+    if isinstance(content, list):
+        return any(_contains_image(item) for item in content)
+    if isinstance(content, dict):
+        if content.get("type") == "image":
+            return True
+        return any(_contains_image(value) for value in content.values())
+    return False
+
+
+def _replace_unsupported_images(payload: dict[str, Any], model: str, vision_hint: str) -> int:
+    """Turn image results into errors that a text-only model can act on."""
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    error_text = _tool_capability_error(model, vision_hint)
+    input_error_text = _input_capability_error(model, vision_hint)
+    replaced = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        new_content: list[Any] = []
+        for block in content:
+            if not isinstance(block, dict):
+                new_content.append(block)
+                continue
+            if block.get("type") == "tool_result" and _contains_image(block.get("content")):
+                replacement = dict(block)
+                replacement["content"] = [{"type": "text", "text": error_text}]
+                replacement["is_error"] = True
+                new_content.append(replacement)
+                replaced += 1
+            elif block.get("type") == "image":
+                new_content.append({"type": "text", "text": input_error_text})
+                replaced += 1
+            else:
+                new_content.append(block)
+        message["content"] = new_content
+    return replaced
+
+
+def _append_system_notice(payload: dict[str, Any], notice: str) -> None:
+    system = payload.get("system")
+    if isinstance(system, str):
+        if notice not in system:
+            payload["system"] = f"{system}\n\n{notice}"
+    elif isinstance(system, list):
+        if not any(isinstance(block, dict) and block.get("text") == notice for block in system):
+            system.append({"type": "text", "text": notice})
+    elif system is None:
+        payload["system"] = notice
 
 
 def router_base_url(port: int = DEFAULT_PORT) -> str:
@@ -73,7 +175,11 @@ def classify_model(model: str, favorites: set[str]) -> tuple[str, str]:
     )
 
 
-def route_payload(body: bytes, favorites: set[str]) -> tuple[str, str, bytes]:
+def route_payload(
+    body: bytes,
+    favorites: set[str],
+    model_modalities: dict[str, frozenset[str]] | None = None,
+) -> tuple[str, str, bytes]:
     try:
         payload = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -83,6 +189,11 @@ def route_payload(body: bytes, favorites: set[str]) -> tuple[str, str, bytes]:
     route, upstream_model = classify_model(payload["model"], favorites)
     if route == "openrouter":
         payload["model"] = upstream_model
+        modalities = (model_modalities or {}).get(upstream_model)
+        if modalities is not None and "image" not in modalities:
+            vision_hint = _vision_hint(favorites, model_modalities or {})
+            _append_system_notice(payload, _capability_notice(upstream_model, vision_hint))
+            _replace_unsupported_images(payload, upstream_model, vision_hint)
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
     return route, upstream_model, body
 
@@ -111,32 +222,34 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path.split("?", 1)[0].rstrip("/") == "/healthz":
             if self.headers.get(LOCAL_TOKEN_HEADER) != self.router.local_token:
-                self._json_response(401, {"error": {"message": "invalid local router token"}})
+                self._error_response(401, "authentication_error", "invalid local router token")
                 return
             self._json_response(200, {"status": "ok", "mode": "hybrid"})
             return
-        self._json_response(404, {"error": {"message": "not found"}})
+        self._error_response(404, "not_found_error", "not found")
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/")
         if path not in ALLOWED_PATHS:
-            self._json_response(404, {"error": {"message": "unsupported endpoint"}})
+            self._error_response(404, "not_found_error", "unsupported endpoint")
             return
         if self.headers.get(LOCAL_TOKEN_HEADER) != self.router.local_token:
-            self._json_response(401, {"error": {"message": "invalid local router token"}})
+            self._error_response(401, "authentication_error", "invalid local router token")
             return
         content_length = self.headers.get("Content-Length")
         try:
             length = int(content_length or "")
         except ValueError:
-            self._json_response(411, {"error": {"message": "Content-Length is required"}})
+            self._error_response(411, "invalid_request_error", "Content-Length is required")
             return
         if length < 0 or length > MAX_BODY_BYTES:
-            self._json_response(413, {"error": {"message": "request body is too large"}})
+            self._error_response(413, "request_too_large", "request body is too large")
             return
         body = self.rfile.read(length)
         try:
-            route, model, body = route_payload(body, self.router.favorites)
+            route, model, body = route_payload(
+                body, self.router.favorites, self.router.model_modalities
+            )
             upstream = (
                 self.router.openrouter_upstream
                 if route == "openrouter"
@@ -146,10 +259,10 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
             self._forward(upstream, self.path, headers, body)
             self._record_status(route, model, None)
         except ValueError as exc:
-            self._json_response(400, {"error": {"message": str(exc)}})
+            self._error_response(400, "invalid_request_error", str(exc))
             self._record_status("rejected", "unknown", str(exc))
         except (OSError, RuntimeError, http.client.HTTPException) as exc:
-            self._json_response(502, {"error": {"message": f"routing failed: {exc}"}})
+            self._error_response(502, "api_error", f"routing failed: {exc}")
             self._record_status("error", "unknown", str(exc))
 
     def _upstream_headers(self, route: str, content_length: int) -> dict[str, str]:
@@ -235,10 +348,30 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _error_response(self, status: int, error_type: str, message: str) -> None:
+        self._json_response(
+            status,
+            {"type": "error", "error": {"type": error_type, "message": message}},
+        )
+
 
 class HybridRouterServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def server_bind(self) -> None:
+        """Bind without HTTPServer's unnecessary reverse-DNS lookup.
+
+        ``HTTPServer.server_bind`` calls ``socket.getfqdn`` after binding but
+        before listening. That lookup can stall for minutes on macOS when local
+        DNS is unavailable, leaving launchd with a bound-but-unhealthy router.
+        The router never uses ``server_name``, so the numeric loopback address
+        is both sufficient and deterministic.
+        """
+        TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
 
     def __init__(
         self,
@@ -249,6 +382,7 @@ class HybridRouterServer(ThreadingHTTPServer):
         anthropic_auth: str,
         anthropic_upstream: str = ANTHROPIC_UPSTREAM,
         openrouter_upstream: str = OPENROUTER_UPSTREAM,
+        model_modalities: dict[str, frozenset[str]] | None = None,
     ) -> None:
         if anthropic_auth not in {"max", "api"}:
             raise ValueError("Anthropic authentication must be max or api")
@@ -257,6 +391,7 @@ class HybridRouterServer(ThreadingHTTPServer):
         self.anthropic_auth = anthropic_auth
         self.anthropic_upstream = anthropic_upstream
         self.openrouter_upstream = openrouter_upstream
+        self.model_modalities = model_modalities or {}
         super().__init__(address, HybridRouterHandler)
 
 
@@ -274,6 +409,7 @@ def run_router(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
         local_token=read_router_token(),
         favorites=set(favorite_ids()),
         anthropic_auth=auth,
+        model_modalities=catalog_input_modalities(load_catalog()),
     )
     try:
         server.serve_forever()

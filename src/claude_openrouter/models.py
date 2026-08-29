@@ -11,6 +11,30 @@ from typing import Any
 OPENROUTER_MODEL_PREFIX = "clor/openrouter/"
 
 
+def input_modalities(model: dict[str, Any]) -> frozenset[str] | None:
+    """Return normalized catalog input modalities, or ``None`` when unknown."""
+    architecture = model.get("architecture")
+    if not isinstance(architecture, dict):
+        return None
+    values = architecture.get("input_modalities")
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        return None
+    return frozenset(value.casefold() for value in values)
+
+
+def catalog_input_modalities(
+    models: list[dict[str, Any]],
+) -> dict[str, frozenset[str]]:
+    """Index known input capabilities by exact OpenRouter model id."""
+    result: dict[str, frozenset[str]] = {}
+    for model in models:
+        model_id = model.get("id")
+        modalities = input_modalities(model)
+        if isinstance(model_id, str) and modalities is not None:
+            result[model_id] = modalities
+    return result
+
+
 def namespaced_model(model_id: str) -> str:
     return f"{OPENROUTER_MODEL_PREFIX}{model_id}"
 

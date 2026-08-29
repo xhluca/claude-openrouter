@@ -326,7 +326,9 @@ def command_setup(
     native_login = has_native_login()
     if anthropic_auth == "max" and not native_login:
         raise RuntimeError(
-            "Claude Max routing requires a native Claude.ai login; run `claude auth login` first"
+            "Claude Max routing requires a native first-party Claude login. Run "
+            "`claude auth status --json`; if it reports loggedIn=false, run "
+            "`claude auth login`, then retry setup"
         )
     settings = configure_claude(
         selected,
