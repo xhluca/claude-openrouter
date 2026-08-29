@@ -39,6 +39,17 @@ def test_uv_installs_use_copy_mode_to_avoid_cross_filesystem_warnings() -> None:
     assert all("--link-mode copy" in command for command in commands)
 
 
+def test_registry_install_refreshes_stale_package_metadata() -> None:
+    installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+    registry_command = next(
+        line
+        for line in installer.splitlines()
+        if "uv tool install" in line and "package_name" in line
+    )
+
+    assert '--refresh-package "$package_name"' in registry_command
+
+
 def test_readme_keeps_acknowledgements_at_bottom() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert readme.rstrip().endswith("management spectrum.")

@@ -127,7 +127,8 @@ if command -v uv >/dev/null 2>&1; then
     uv tool install --force --link-mode copy "$local_source"
   elif [ -n "$wheel_path" ]; then
     uv tool install --force --link-mode copy "$wheel_path"
-  elif ! uv tool install --force --link-mode copy --default-index "$pypi_index_url" "$package_spec"; then
+  elif ! uv tool install --force --link-mode copy --refresh-package "$package_name" \
+    --default-index "$pypi_index_url" "$package_spec"; then
     printf 'PyPI installation failed; using the verified release fallback.\n' >&2
     prepare_fallback_wheel
     uv tool install --force --link-mode copy "$wheel_path"
