@@ -44,6 +44,7 @@ def sample_models() -> list[dict[str, Any]]:
             "description": "Multimodal reasoning and tools",
             "context_length": 1_000_000,
             "pricing": {"prompt": "0.000002", "completion": "0.000012"},
+            "supported_parameters": ["tools", "tool_choice", "max_tokens"],
         },
         {
             "id": "qwen/qwen3-coder",
@@ -51,6 +52,7 @@ def sample_models() -> list[dict[str, Any]]:
             "description": "Coding model",
             "context_length": 262_144,
             "pricing": {"prompt": "0", "completion": "0"},
+            "supported_parameters": ["max_tokens"],
         },
     ]
 
@@ -58,4 +60,3 @@ def sample_models() -> list[dict[str, Any]]:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value), encoding="utf-8")
-

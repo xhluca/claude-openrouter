@@ -75,9 +75,27 @@ globs; `*`, `?`, and bracket expressions use shell-style matching:
 
 ```bash
 clor search claude
+clor search glm --tools
 clor search 'anthropic/*' '*coder*'
 clor search --regex '^(anthropic|google)/.*(sonnet|gemini)'
 ```
+
+`--tools` keeps only models whose live OpenRouter metadata advertises function
+calling. The table and interactive picker show `tools ✓`, `tools ✗`, or
+`tools ?` so the compatibility signal is visible without a separate query.
+Because catalog metadata cannot prove that a model follows Claude Code's
+particular tool protocol reliably, run one real compatibility check before
+depending on a new model for agent work:
+
+```bash
+clor check z-ai/glm-5.3-flash
+```
+
+`clor check` does not require favoriting the model. It starts an isolated local
+route, asks the real Claude Code CLI to perform one `Glob` call, verifies that
+the tool completed and that the model continued from its result, then exits.
+The OpenRouter request is billable; the command reports Claude Code's measured
+cost when available.
 
 Select one exact model, several exact models, or open the interactive picker:
 
@@ -93,6 +111,14 @@ replaces the saved favorite set. In the picker, type a search and press Down or
 Enter to browse its results. Press Enter or Space to select and deselect; press
 Up past the first result or Esc to focus the search again. Press `s` while
 browsing results, or `Shift-S`/`Ctrl-S` while typing a search, to save.
+Selecting a model that does not advertise tools is allowed, but clor warns that
+Claude Code agent actions may fail and gives the exact `clor check` command.
+
+An existing Claude session does not need a full restart after `clor select`.
+Run `/agents` once to load the updated generated subagent definitions
+immediately, then reopen `/model`. Claude Code normally hot-reloads the managed
+hook setting as well; `/hooks` shows whether it is active. Restart only if the
+session's settings watcher missed the change.
 
 Launch Claude Code normally, then switch models normally:
 
@@ -164,6 +190,8 @@ unchanged for models whose catalog metadata includes `image`.
 | `clor index` | Fetch and cache the current OpenRouter model catalog |
 | `clor fetch` | Alias for `index` |
 | `clor search QUERY...` | Refresh, then search names, IDs, and descriptions |
+| `clor search QUERY... --tools` | Show only models advertising tool calling |
+| `clor check MODEL` | Run one live, billable Claude Code tool round-trip |
 | `clor setup` | Run the install-time key and model setup again |
 | `clor select [MODEL]` | Replace `/model` favorites exactly |
 | `clor config` | Replace and validate the stored OpenRouter key |
@@ -212,7 +240,8 @@ model, the request errors instead of falling back to another paid provider.
 Claude Code is optimized for Anthropic models. OpenRouter can accept other model
 IDs through its Anthropic-compatible endpoint, but models differ in tool use,
 thinking blocks, context handling, and Claude Code compatibility. Prefer models
-that OpenRouter documents as suitable for agentic tool use.
+that advertise tools, and use `clor check MODEL` to verify an actual Claude Code
+tool round-trip rather than assuming that metadata alone guarantees behavior.
 
 ## Reset and uninstall
 

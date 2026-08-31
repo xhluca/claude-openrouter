@@ -46,9 +46,13 @@ def run_picker(monkeypatch, sample_models, keys):
     monkeypatch.setattr(
         picker,
         "_draw",
-        lambda _screen, _models, query, cursor, _selected, search_mode: states.append(
-            (query, cursor, search_mode)
-        ),
+        lambda _screen,
+        _models,
+        query,
+        cursor,
+        _selected,
+        search_mode,
+        _catalog=None: states.append((query, cursor, search_mode)),
     )
     result = picker._curses_picker(sample_models, [])
     return result, states
@@ -118,3 +122,24 @@ def test_search_help_shows_save_shortcuts(monkeypatch, sample_models) -> None:
     picker._draw(screen, sample_models, "sonnet", 0, [], True)
 
     assert any("Ctrl-S/Shift-S save" in value for value in screen.values)
+
+
+def test_picker_shows_tool_badges_and_selected_warning(monkeypatch, sample_models) -> None:
+    screen = RecordingScreen()
+    monkeypatch.setattr(picker, "_set_cursor", lambda _visible: None)
+    monkeypatch.setattr(picker, "_COLORS_ENABLED", False)
+
+    picker._draw(
+        screen,
+        sample_models[2:],
+        "",
+        0,
+        ["qwen/qwen3-coder"],
+        True,
+        sample_models,
+    )
+
+    rendered = "\n".join(screen.values)
+    assert "[tools ✓]" in rendered
+    assert "[tools ✗]" in rendered
+    assert "1 without advertised tools" in rendered

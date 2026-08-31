@@ -104,6 +104,17 @@ assert x['anthropic_auth'] == 'max', x
 print('DOCKER_DOCTOR_OK')
 PY
 
+clor search glm-5.3 --tools > /tmp/tool-search.txt
+grep -q '^z-ai/glm-5.3-flash' /tmp/tool-search.txt
+echo OPENROUTER_TOOL_SEARCH_OK
+if ! clor check z-ai/glm-5.3-flash > /tmp/tool-check.txt 2>/tmp/tool-check.error; then
+  sed -n '1,160p' /tmp/tool-check.txt >&2
+  sed -n '1,160p' /tmp/tool-check.error >&2
+  exit 1
+fi
+grep -q 'Tool round-trip passed' /tmp/tool-check.txt
+echo CLAUDE_CODE_TOOL_ROUND_TRIP_OK
+
 native_status=0
 native="$(claude -p --model sonnet --tools '' --no-session-persistence \
   'Reply with exactly CLOR_MAX_OK and nothing else.' \
@@ -247,7 +258,7 @@ background_output="$(claude --background \
 printf '%s\n' "$background_output" > /tmp/background-output.txt
 
 agent_ready=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 60); do
   claude agents --json --all </dev/null > /tmp/agents.json
   if python - <<'PY'
 import json

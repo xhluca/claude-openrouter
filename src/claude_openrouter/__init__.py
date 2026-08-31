@@ -1,3 +1,3 @@
 """Connect Claude Code directly to OpenRouter."""
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"

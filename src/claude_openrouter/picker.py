@@ -8,7 +8,7 @@ import sys
 from contextlib import suppress
 from typing import Any
 
-from .models import top_matches
+from .models import supports_tools, tool_capability_badge, top_matches
 
 PAIR_TITLE = 1
 PAIR_ACCENT = 2
@@ -81,6 +81,7 @@ def _draw(
     cursor: int,
     selected: list[str],
     search_mode: bool,
+    catalog: list[dict[str, Any]] | None = None,
 ) -> None:
     screen.erase()
     height, width = screen.getmaxyx()
@@ -112,6 +113,17 @@ def _draw(
             width - 1,
             _style(PAIR_ACCENT, curses.A_DIM),
         )
+    capability_models = models if catalog is None else catalog
+    selected_without_tools = sum(
+        not supports_tools(model)
+        for model in capability_models
+        if model["id"] in selected
+    )
+    selection_warning = (
+        f" · ⚠ {selected_without_tools} without advertised tools"
+        if selected_without_tools
+        else ""
+    )
     _add_segments(
         screen,
         4,
@@ -119,6 +131,7 @@ def _draw(
         [
             ("Selected: ", _style(PAIR_ACCENT, curses.A_BOLD)),
             (str(len(selected)), _style(PAIR_SUCCESS, curses.A_BOLD)),
+            (selection_warning, _style(PAIR_QUERY, curses.A_BOLD)),
         ],
     )
     available_rows = max(1, height - 6)
@@ -129,11 +142,12 @@ def _draw(
         mark = "●" if model_id in selected else "○"
         name = model.get("name")
         suffix = f" — {name}" if isinstance(name, str) and name != model_id else ""
+        capability = f" [{tool_capability_badge(model)}]"
         if not search_mode and absolute == cursor:
             screen.addnstr(
                 row_index,
                 0,
-                f"{mark} {model_id}{suffix}",
+                f"{mark} {model_id}{capability}{suffix}",
                 width - 1,
                 _style(PAIR_CURSOR, curses.A_BOLD),
             )
@@ -149,6 +163,10 @@ def _draw(
                 [
                     (f"{mark} ", mark_style),
                     (model_id, _style(PAIR_ACCENT, curses.A_BOLD)),
+                    (
+                        capability,
+                        _style(PAIR_SUCCESS if supports_tools(model) else PAIR_QUERY),
+                    ),
                     (suffix, curses.A_DIM),
                 ],
             )
@@ -171,7 +189,7 @@ def _curses_picker(models: list[dict[str, Any]], initial: list[str]) -> list[str
         cursor = 0
         search_mode = True
         while True:
-            _draw(screen, results, query, cursor, selected, search_mode)
+            _draw(screen, results, query, cursor, selected, search_mode, models)
             key = screen.get_wch()
             if search_mode:
                 if key in ("\x13", "S"):
@@ -237,7 +255,7 @@ def _line_picker(models: list[dict[str, Any]], initial: list[str]) -> list[str] 
         for index, model in enumerate(results, 1):
             model_id = str(model["id"])
             mark = "x" if model_id in selected else " "
-            print(f"  {index:>2}) [{mark}] {model_id}")
+            print(f"  {index:>2}) [{mark}] {model_id} [{tool_capability_badge(model)}]")
         while True:
             action = input("Toggle number(s), / search, s save, q cancel: ").strip().lower()
             if action == "/":

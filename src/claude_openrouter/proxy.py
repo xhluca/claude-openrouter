@@ -330,6 +330,8 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
             connection.close()
 
     def _record_status(self, route: str, model: str, error: str | None) -> None:
+        if not self.router.record_status:
+            return
         status: dict[str, Any] = {
             "version": 1,
             "at": datetime.now(timezone.utc).isoformat(),
@@ -384,6 +386,7 @@ class HybridRouterServer(ThreadingHTTPServer):
         anthropic_upstream: str = ANTHROPIC_UPSTREAM,
         openrouter_upstream: str = OPENROUTER_UPSTREAM,
         model_modalities: dict[str, frozenset[str]] | None = None,
+        record_status: bool = True,
     ) -> None:
         if anthropic_auth not in {"max", "api"}:
             raise ValueError("Anthropic authentication must be max or api")
@@ -393,6 +396,7 @@ class HybridRouterServer(ThreadingHTTPServer):
         self.anthropic_upstream = anthropic_upstream
         self.openrouter_upstream = openrouter_upstream
         self.model_modalities = model_modalities or {}
+        self.record_status = record_status
         super().__init__(address, HybridRouterHandler)
 
 

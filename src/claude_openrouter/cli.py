@@ -20,8 +20,17 @@ from .anthropic import (
     validate_anthropic_key_shape,
     write_anthropic_credential,
 )
+from .check import probe_model
 from .launcher import has_native_login, launch_claude
-from .models import exact_models, hybrid_openrouter_allowed, print_models, search_models
+from .models import (
+    exact_models,
+    hybrid_openrouter_allowed,
+    original_model,
+    print_models,
+    search_models,
+    supports_tools,
+    tool_capability_badge,
+)
 from .openrouter import (
     load_catalog,
     read_credential,
@@ -81,7 +90,18 @@ def parser() -> argparse.ArgumentParser:
     search = commands.add_parser("search", help="refresh and search the model catalog")
     search.add_argument("queries", nargs="+", help="glob patterns or plain terms (OR matching)")
     search.add_argument("--regex", action="store_true", help="interpret each query as a regex")
+    search.add_argument(
+        "--tools",
+        action="store_true",
+        help="show only models that advertise tool calling",
+    )
     search.add_argument("--json", action="store_true", help="print matches as JSON")
+
+    check = commands.add_parser(
+        "check",
+        help="run a billable Claude Code tool round-trip for one model",
+    )
+    check.add_argument("model", help="exact OpenRouter model ID (need not be a favorite)")
 
     setup = commands.add_parser("setup", help="configure the key and Claude Code again")
     setup.add_argument("--key-stdin", action="store_true", help="read the key from stdin")
@@ -288,6 +308,26 @@ def _choose_or_validate(
     return exact_models(eligible, chosen)
 
 
+def _warn_selected_tool_support(models: list[dict[str, Any]]) -> None:
+    unsupported = [str(model["id"]) for model in models if not supports_tools(model)]
+    if not unsupported:
+        return
+    print(
+        _styled(
+            "warning: these favorites do not advertise OpenRouter tool calling: "
+            f"{', '.join(unsupported)}",
+            "1;33",
+            stream=sys.stderr,
+        ),
+        file=sys.stderr,
+    )
+    print(
+        "They may still chat, but Claude Code agent actions can fail. "
+        f"Run `clor check {unsupported[0]}` for a live tool round-trip.",
+        file=sys.stderr,
+    )
+
+
 def command_index(*, as_json: bool) -> int:
     models = refresh_catalog()
     print_models(models, as_json=as_json)
@@ -296,15 +336,60 @@ def command_index(*, as_json: bool) -> int:
     return 0
 
 
-def command_search(queries: list[str], *, regex: bool, as_json: bool) -> int:
+def command_search(
+    queries: list[str], *, regex: bool, tools_only: bool, as_json: bool
+) -> int:
     models = refresh_catalog()
     matches = search_models(models, queries, regex=regex)
+    if tools_only:
+        matches = [model for model in matches if supports_tools(model)]
     print_models(matches, as_json=as_json)
+    qualifier = " tool-capable" if tools_only else ""
     print(
-        f"Refreshed {len(models)} models; {len(matches)} matched.",
+        f"Refreshed {len(models)} models; {len(matches)}{qualifier} matched.",
         file=sys.stderr,
     )
     return 0 if matches else 1
+
+
+def command_check(requested_model: str) -> int:
+    model_id = original_model(requested_model) or requested_model
+    if not hybrid_openrouter_allowed(model_id):
+        raise ValueError(
+            "tool checks are for non-Anthropic OpenRouter models; use Claude Code "
+            "directly for built-in Claude models"
+        )
+    model = exact_models(refresh_catalog(), [model_id])[0]
+    print(f"Model: {model_id}")
+    print(f"Catalog: {tool_capability_badge(model, detailed=True)}")
+    print("Running an isolated, billable Claude Code Glob round-trip…")
+    result = probe_model(model)
+    if result.passed:
+        cost = (
+            f" · ${result.total_cost_usd:.6f} reported cost"
+            if result.total_cost_usd is not None
+            else ""
+        )
+        print(_styled(f"✓ Tool round-trip passed{cost}", "1;32"))
+        print("The model emitted a valid Glob call, consumed its result, and continued.")
+        return 0
+
+    failures: list[str] = []
+    if result.returncode != 0:
+        failures.append(f"Claude Code exited with status {result.returncode}")
+    if not result.tool_called:
+        failures.append("no Glob tool call was emitted")
+    elif not result.tool_completed:
+        failures.append("the Glob tool result did not complete successfully")
+    if not result.acknowledged_result:
+        failures.append("the model did not continue correctly after the tool result")
+    print(_styled("✗ Tool round-trip failed", "1;31"), file=sys.stderr)
+    for failure in failures:
+        print(f"  - {failure}", file=sys.stderr)
+    if result.diagnostic:
+        first_line = result.diagnostic.splitlines()[0]
+        print(f"  - Claude Code: {first_line[:300]}", file=sys.stderr)
+    return 1
 
 
 def command_setup(
@@ -321,6 +406,7 @@ def command_setup(
         validate_key(key)
     models = refresh_catalog(key)
     selected = _choose_or_validate(models, ids)
+    _warn_selected_tool_support(selected)
     write_credential(key)
     if anthropic_auth == "api":
         write_anthropic_credential(_read_anthropic_key(from_stdin=anthropic_key_stdin))
@@ -362,7 +448,11 @@ def command_setup(
     print()
     print(_styled("Favorites:", "1;35"))
     for model in selected:
-        print(f"  {_styled('●', '1;32')} {_styled(model['id'], '1;36')}")
+        badge_color = "1;32" if supports_tools(model) else "1;33"
+        print(
+            f"  {_styled('●', '1;32')} {_styled(model['id'], '1;36')} "
+            f"{_styled(f'[{tool_capability_badge(model)}]', badge_color)}"
+        )
     print()
     print(
         f"{_styled('Next:', '1;33')} run {_styled('claude', '1;32')}, then use "
@@ -385,6 +475,7 @@ def command_select(
         requested = models_option
     models = refresh_catalog()
     selected = _choose_or_validate(models, requested)
+    _warn_selected_tool_support(selected)
     preferences = load_preferences()
     port = preferences.get("router_port", DEFAULT_PORT)
     auth = preferences.get("anthropic_auth", "max")
@@ -405,7 +496,14 @@ def command_select(
         )
     )
     for model in selected:
-        print(_styled(f"  - {model['id']}", "1;36"))
+        print(
+            _styled(f"  - {model['id']}", "1;36"),
+            _styled(
+                f"[{tool_capability_badge(model)}]",
+                "1;32" if supports_tools(model) else "1;33",
+            ),
+        )
+    print("Existing Claude sessions: run /agents to reload favorites without restarting.")
     return 0
 
 
@@ -573,7 +671,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in {"index", "fetch"}:
             return command_index(as_json=args.json)
         if args.command == "search":
-            return command_search(args.queries, regex=args.regex, as_json=args.json)
+            return command_search(
+                args.queries,
+                regex=args.regex,
+                tools_only=args.tools,
+                as_json=args.json,
+            )
+        if args.command == "check":
+            return command_check(args.model)
         if args.command == "setup":
             return command_setup(
                 key_stdin=args.key_stdin,

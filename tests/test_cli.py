@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 
 from claude_openrouter import cli
+from claude_openrouter.check import ToolProbeResult
 from claude_openrouter.openrouter import save_catalog, write_credential
 from claude_openrouter.paths import anthropic_credential_path, claude_settings_path
 from claude_openrouter.settings import load_preferences, save_preferences
@@ -106,6 +107,67 @@ def test_search_always_refreshes(sample_models, monkeypatch, capsys) -> None:
     assert "Refreshed 4 models; 2 matched." in output.err
 
 
+def test_search_tools_filters_to_advertised_tool_models(
+    sample_models, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(cli, "refresh_catalog", lambda: sample_models)
+
+    assert cli.main(["search", "gemini", "--tools"]) == 0
+    output = capsys.readouterr()
+    assert "google/gemini-3.1-pro-preview" in output.out
+    assert "qwen/qwen3-coder" not in output.out
+    assert "1 tool-capable matched" in output.err
+
+
+def test_check_runs_a_live_probe_without_requiring_a_favorite(
+    sample_models, monkeypatch, capsys
+) -> None:
+    checked = []
+    monkeypatch.setattr(cli, "refresh_catalog", lambda: sample_models)
+    monkeypatch.setattr(
+        cli,
+        "probe_model",
+        lambda model: checked.append(model)
+        or ToolProbeResult(
+            tool_called=True,
+            tool_completed=True,
+            acknowledged_result=True,
+            returncode=0,
+            total_cost_usd=0.00125,
+            final_text="CLOR_TOOL_CHECK_OK",
+            diagnostic="",
+        ),
+    )
+
+    assert cli.main(["check", "clor/openrouter/google/gemini-3.1-pro-preview"]) == 0
+    assert checked == [sample_models[2]]
+    output = capsys.readouterr().out
+    assert "Tool round-trip passed" in output
+    assert "$0.001250 reported cost" in output
+
+
+def test_check_explains_a_model_that_does_not_call_tools(
+    sample_models, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(cli, "refresh_catalog", lambda: sample_models)
+    monkeypatch.setattr(
+        cli,
+        "probe_model",
+        lambda _model: ToolProbeResult(
+            tool_called=False,
+            tool_completed=False,
+            acknowledged_result=False,
+            returncode=0,
+            total_cost_usd=None,
+            final_text="I cannot do that.",
+            diagnostic="",
+        ),
+    )
+
+    assert cli.main(["check", "qwen/qwen3-coder"]) == 1
+    assert "no Glob tool call was emitted" in capsys.readouterr().err
+
+
 def test_setup_from_stdin_writes_favorites(
     isolated_home, sample_models, monkeypatch, capsys
 ) -> None:
@@ -141,7 +203,23 @@ def test_select_positional_maps_to_one_model(
     monkeypatch.setattr(cli, "has_native_login", lambda: True)
     monkeypatch.setattr(cli, "start_service", lambda _port: "test service")
     assert cli.main(["select", "google/gemini-3.1-pro-preview"]) == 0
-    assert "Saved 1 /model favorite" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Saved 1 /model favorite" in output
+    assert "run /agents" in output
+
+
+def test_select_warns_when_tools_are_not_advertised(
+    isolated_home, sample_models, monkeypatch, capsys
+) -> None:
+    write_credential(KEY)
+    monkeypatch.setattr(cli, "refresh_catalog", lambda _key=None: sample_models)
+    monkeypatch.setattr(cli, "has_native_login", lambda: True)
+    monkeypatch.setattr(cli, "start_service", lambda _port: "test service")
+
+    assert cli.main(["select", "qwen/qwen3-coder"]) == 0
+    error = capsys.readouterr().err
+    assert "do not advertise OpenRouter tool calling" in error
+    assert "clor check qwen/qwen3-coder" in error
 
 
 def test_select_rejects_ambiguous_arguments(isolated_home, sample_models, monkeypatch) -> None:

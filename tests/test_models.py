@@ -4,10 +4,15 @@ import pytest
 
 from claude_openrouter.models import (
     catalog_input_modalities,
+    compact_row,
     exact_models,
     input_modalities,
     picker_row,
     search_models,
+    supported_parameters,
+    supports_parameter,
+    supports_tools,
+    tool_capability_badge,
 )
 
 
@@ -64,6 +69,32 @@ def test_picker_row_has_human_metadata_and_management_marker(sample_models) -> N
     assert row["label"] == "Claude Sonnet 4.6"
     assert "OpenRouter via claude-openrouter" in row["description"]
     assert "$3/M input" in row["description"]
+    assert "tools ?" in row["description"]
+
+
+def test_tool_capabilities_are_explicit_and_unknown_is_not_assumed(sample_models) -> None:
+    gemini = sample_models[2]
+    qwen = sample_models[3]
+    unknown = sample_models[0]
+
+    assert supported_parameters(gemini) == frozenset(
+        {"tools", "tool_choice", "max_tokens"}
+    )
+    assert supports_parameter(gemini, "TOOLS") is True
+    assert supports_tools(gemini) is True
+    assert tool_capability_badge(gemini, detailed=True) == "tools ✓ · tool choice ✓"
+    assert supports_parameter(qwen, "tools") is False
+    assert supports_tools(qwen) is False
+    assert tool_capability_badge(qwen, detailed=True) == "tools ✗ · tool choice ✗"
+    assert supports_parameter(unknown, "tools") is None
+    assert supports_tools(unknown) is False
+    assert tool_capability_badge(unknown) == "tools ?"
+
+
+def test_compact_row_exposes_tool_metadata(sample_models) -> None:
+    assert compact_row(sample_models[2]).endswith("\t✓\t✓")
+    assert compact_row(sample_models[3]).endswith("\t✗\t✗")
+    assert compact_row(sample_models[0]).endswith("\t?\t?")
 
 
 def test_catalog_input_modalities_uses_exact_ids_and_skips_unknown_metadata() -> None:

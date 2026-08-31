@@ -11,6 +11,39 @@ from typing import Any
 OPENROUTER_MODEL_PREFIX = "clor/openrouter/"
 
 
+def supported_parameters(model: dict[str, Any]) -> frozenset[str] | None:
+    """Return normalized OpenRouter parameters, or ``None`` when unknown."""
+    values = model.get("supported_parameters")
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        return None
+    return frozenset(value.casefold() for value in values)
+
+
+def supports_parameter(model: dict[str, Any], parameter: str) -> bool | None:
+    parameters = supported_parameters(model)
+    return None if parameters is None else parameter.casefold() in parameters
+
+
+def supports_tools(model: dict[str, Any]) -> bool:
+    return supports_parameter(model, "tools") is True
+
+
+def _capability_mark(value: bool | None) -> str:
+    if value is True:
+        return "✓"
+    if value is False:
+        return "✗"
+    return "?"
+
+
+def tool_capability_badge(model: dict[str, Any], *, detailed: bool = False) -> str:
+    tools = _capability_mark(supports_parameter(model, "tools"))
+    if not detailed:
+        return f"tools {tools}"
+    tool_choice = _capability_mark(supports_parameter(model, "tool_choice"))
+    return f"tools {tools} · tool choice {tool_choice}"
+
+
 def input_modalities(model: dict[str, Any]) -> frozenset[str] | None:
     """Return normalized catalog input modalities, or ``None`` when unknown."""
     architecture = model.get("architecture")
@@ -161,7 +194,11 @@ def _price_per_million(value: Any) -> str | None:
 
 
 def picker_description(model: dict[str, Any]) -> str:
-    parts = [str(model.get("id", "")), "OpenRouter via claude-openrouter"]
+    parts = [
+        str(model.get("id", "")),
+        "OpenRouter via claude-openrouter",
+        tool_capability_badge(model, detailed=True),
+    ]
     context = model.get("context_length")
     if isinstance(context, int) and context > 0:
         parts.append(f"{context // 1000}K context" if context >= 1000 else f"{context} context")
@@ -191,13 +228,15 @@ def compact_row(model: dict[str, Any]) -> str:
     context = model.get("context_length")
     context_text = f"{context:,}" if isinstance(context, int) else "-"
     label = name if isinstance(name, str) else ""
-    return f"{model_id}\t{label}\t{context_text}"
+    tools = _capability_mark(supports_parameter(model, "tools"))
+    tool_choice = _capability_mark(supports_parameter(model, "tool_choice"))
+    return f"{model_id}\t{label}\t{context_text}\t{tools}\t{tool_choice}"
 
 
 def print_models(models: list[dict[str, Any]], *, as_json: bool = False) -> None:
     if as_json:
         print(json.dumps(models, indent=2, ensure_ascii=False))
         return
-    print("MODEL\tNAME\tCONTEXT")
+    print("MODEL\tNAME\tCONTEXT\tTOOLS\tTOOL_CHOICE")
     for model in models:
         print(compact_row(model))
