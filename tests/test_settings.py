@@ -20,15 +20,28 @@ from claude_openrouter.paths import (
 from claude_openrouter.settings import (
     BASE_URL,
     configure_claude,
+    load_preferences,
     refresh_claude_credential,
     refresh_managed_subagents,
     reset_integration,
     restore_claude_settings,
+    save_preferences,
+    set_check_confirmation,
     write_key_helper,
 )
 
 KEY = "sk-or-v1-this-is-a-fake-test-key"
 NEW_KEY = "sk-or-v1-this-is-a-new-fake-test-key"
+
+
+def test_billable_check_confirmation_survives_favorite_changes(
+    isolated_home, sample_models
+) -> None:
+    set_check_confirmation(False)
+
+    save_preferences(sample_models[2:3], str(sample_models[2]["id"]))
+
+    assert load_preferences()["confirm_billable_checks"] is False
 
 
 def read_json(path) -> dict:

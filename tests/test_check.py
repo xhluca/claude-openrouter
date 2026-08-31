@@ -2,13 +2,25 @@ from __future__ import annotations
 
 import json
 import subprocess
+from decimal import Decimal
 
 from claude_openrouter import check
-from claude_openrouter.check import PROBE_MARKER, parse_probe_result
+from claude_openrouter.check import PROBE_MARKER, estimate_probe_cost, parse_probe_result
 
 
 def _event(value: dict[str, object]) -> str:
     return json.dumps(value)
+
+
+def test_estimate_probe_cost_uses_current_catalog_rates() -> None:
+    model = {"pricing": {"prompt": "0.000002", "completion": "0.000012"}}
+
+    assert estimate_probe_cost(model) == Decimal("0.036000")
+    assert estimate_probe_cost(model, input_tokens=1_000, output_tokens=100) == Decimal(
+        "0.003200"
+    )
+    assert estimate_probe_cost({}) is None
+    assert estimate_probe_cost({"pricing": {"prompt": "unknown"}}) is None
 
 
 def test_parse_probe_result_requires_a_completed_tool_round_trip() -> None:

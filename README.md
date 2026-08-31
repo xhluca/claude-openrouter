@@ -94,8 +94,19 @@ clor check z-ai/glm-5.3-flash
 `clor check` does not require favoriting the model. It starts an isolated local
 route, asks the real Claude Code CLI to perform one `Glob` call, verifies that
 the tool completed and that the model continued from its result, then exits.
-The OpenRouter request is billable; the command reports Claude Code's measured
-cost when available.
+Before sending the billable request, it shows a model-specific planning range
+from the current OpenRouter input/output rates and asks:
+
+```text
+Continue? [y] Yes / [N] No / [a] Always allow:
+```
+
+No is the default. `Always allow` disables future prompts while retaining the
+estimate in command output; restore them with `clor config --check-confirmation
+ask`. Scripts and CI can consent to one run explicitly with `clor check MODEL
+--yes`. The exact charge cannot be known in advance because Claude Code's
+injected context and provider usage vary; the successful result also shows the
+cost reported by Claude Code when available.
 
 Select one exact model, several exact models, or open the interactive picker:
 
@@ -191,10 +202,11 @@ unchanged for models whose catalog metadata includes `image`.
 | `clor fetch` | Alias for `index` |
 | `clor search QUERY...` | Refresh, then search names, IDs, and descriptions |
 | `clor search QUERY... --tools` | Show only models advertising tool calling |
-| `clor check MODEL` | Run one live, billable Claude Code tool round-trip |
+| `clor check MODEL [--yes]` | Confirm and run one billable Claude Code tool round-trip |
 | `clor setup` | Run the install-time key and model setup again |
 | `clor select [MODEL]` | Replace `/model` favorites exactly |
 | `clor config` | Replace and validate the stored OpenRouter key |
+| `clor config --check-confirmation ask\|never` | Configure future check prompts |
 | `clor doctor` | Check the service, favorites, and native Claude login |
 | `clor claude [ARGS...]` | Compatibility alias for `claude [ARGS...]` |
 | `clor update` | Install the latest release and report the version change |

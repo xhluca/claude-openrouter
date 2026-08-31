@@ -139,7 +139,12 @@ def test_check_runs_a_live_probe_without_requiring_a_favorite(
         ),
     )
 
-    assert cli.main(["check", "clor/openrouter/google/gemini-3.1-pro-preview"]) == 0
+    assert (
+        cli.main(
+            ["check", "clor/openrouter/google/gemini-3.1-pro-preview", "--yes"]
+        )
+        == 0
+    )
     assert checked == [sample_models[2]]
     output = capsys.readouterr().out
     assert "Tool round-trip passed" in output
@@ -164,8 +169,77 @@ def test_check_explains_a_model_that_does_not_call_tools(
         ),
     )
 
-    assert cli.main(["check", "qwen/qwen3-coder"]) == 1
+    assert cli.main(["check", "qwen/qwen3-coder", "--yes"]) == 1
     assert "no Glob tool call was emitted" in capsys.readouterr().err
+
+
+def test_check_defaults_to_no_before_sending_a_billable_request(
+    isolated_home, sample_models, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(cli, "refresh_catalog", lambda: sample_models)
+    monkeypatch.setattr(cli.sys, "stdin", TtyBuffer())
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    monkeypatch.setattr(
+        cli,
+        "probe_model",
+        lambda _model: (_ for _ in ()).throw(AssertionError("must not send a request")),
+    )
+
+    assert cli.main(["check", "google/gemini-3.1-pro-preview"]) == 0
+    output = capsys.readouterr().out
+    assert "Estimated charge: about $0.036–$1.024" in output
+    assert "Cancelled; no billable request was sent" in output
+
+
+def test_check_requires_explicit_yes_outside_a_terminal(
+    isolated_home, sample_models, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(cli, "refresh_catalog", lambda: sample_models)
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
+    monkeypatch.setattr(
+        cli,
+        "probe_model",
+        lambda _model: (_ for _ in ()).throw(AssertionError("must not send a request")),
+    )
+
+    assert cli.main(["check", "google/gemini-3.1-pro-preview"]) == 1
+    assert "rerun with --yes" in capsys.readouterr().err
+
+
+def test_check_always_allow_is_persistent_and_reversible(
+    isolated_home, sample_models, monkeypatch, capsys
+) -> None:
+    checked = []
+    result = ToolProbeResult(
+        tool_called=True,
+        tool_completed=True,
+        acknowledged_result=True,
+        returncode=0,
+        total_cost_usd=0.001,
+        final_text="CLOR_TOOL_CHECK_OK",
+        diagnostic="",
+    )
+    monkeypatch.setattr(cli, "refresh_catalog", lambda: sample_models)
+    monkeypatch.setattr(cli.sys, "stdin", TtyBuffer())
+    monkeypatch.setattr("builtins.input", lambda _prompt: "always")
+    monkeypatch.setattr(
+        cli, "probe_model", lambda model: checked.append(model["id"]) or result
+    )
+
+    assert cli.main(["check", "google/gemini-3.1-pro-preview"]) == 0
+    assert load_preferences()["confirm_billable_checks"] is False
+    assert "Future checks will not ask" in capsys.readouterr().out
+
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("must not ask again")),
+    )
+    assert cli.main(["check", "google/gemini-3.1-pro-preview"]) == 0
+    assert len(checked) == 2
+
+    assert cli.main(["config", "--check-confirmation", "ask"]) == 0
+    assert load_preferences()["confirm_billable_checks"] is True
 
 
 def test_setup_from_stdin_writes_favorites(

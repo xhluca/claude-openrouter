@@ -40,6 +40,7 @@ VERSION_2_ENV_FIELDS = (*LEGACY_ENV_FIELDS, "ANTHROPIC_CUSTOM_HEADERS")
 ENV_FIELDS = (*VERSION_2_ENV_FIELDS, "ENABLE_TOOL_SEARCH")
 BACKUP_VERSION = 4
 LOCAL_TOKEN_HEADER = "X-Claude-OpenRouter-Token"
+CHECK_CONFIRMATION_FIELD = "confirm_billable_checks"
 
 
 def _field_snapshot(document: dict[str, Any], field: str) -> dict[str, Any]:
@@ -100,11 +101,21 @@ def load_preferences() -> dict[str, Any]:
     auth = document.get("anthropic_auth", "max")
     if auth not in {"max", "api"}:
         raise RuntimeError(f"invalid Anthropic authentication mode in {preferences_path()}")
+    confirmation = document.get(CHECK_CONFIRMATION_FIELD, True)
+    if not isinstance(confirmation, bool):
+        raise RuntimeError(f"invalid billable-check preference in {preferences_path()}")
     return document
 
 
 def favorite_ids() -> list[str]:
     return list(load_preferences().get("favorites", []))
+
+
+def set_check_confirmation(required: bool) -> None:
+    document = load_preferences()
+    document["version"] = 2
+    document[CHECK_CONFIRMATION_FIELD] = required
+    atomic_write_json(preferences_path(), document)
 
 
 def save_preferences(
@@ -118,6 +129,8 @@ def save_preferences(
         raise ValueError("Anthropic authentication must be max or api")
     if not 1 <= port <= 65535:
         raise ValueError("router port must be between 1 and 65535")
+    current = load_preferences()
+    confirmation = current.get(CHECK_CONFIRMATION_FIELD, True)
     atomic_write_json(
         preferences_path(),
         {
@@ -127,6 +140,7 @@ def save_preferences(
             "default_model": default_model,
             "anthropic_auth": anthropic_auth,
             "router_port": port,
+            CHECK_CONFIRMATION_FIELD: confirmation,
         },
     )
 

@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import threading
 from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,10 @@ from .proxy import LOCAL_TOKEN_HEADER, HybridRouterServer, router_base_url
 
 PROBE_MARKER = "CLOR_TOOL_CHECK_OK"
 PROBE_FILENAME = "clor-tool-probe.txt"
+PROBE_INPUT_TOKEN_ESTIMATE = 15_000
+PROBE_OUTPUT_TOKEN_ESTIMATE = 500
+PROBE_INPUT_TOKEN_PLANNING_MAX = 500_000
+PROBE_OUTPUT_TOKEN_PLANNING_MAX = 2_000
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,29 @@ class ToolProbeResult:
             and self.tool_completed
             and self.acknowledged_result
         )
+
+
+def estimate_probe_cost(
+    model: dict[str, Any],
+    *,
+    input_tokens: int = PROBE_INPUT_TOKEN_ESTIMATE,
+    output_tokens: int = PROBE_OUTPUT_TOKEN_ESTIMATE,
+) -> Decimal | None:
+    """Estimate a probe from catalog rates and the expected Claude Code context."""
+    pricing = model.get("pricing")
+    if not isinstance(pricing, dict):
+        return None
+    try:
+        prompt = Decimal(str(pricing["prompt"]))
+        completion = Decimal(str(pricing["completion"]))
+    except (InvalidOperation, KeyError, TypeError, ValueError):
+        return None
+    if not prompt.is_finite() or not completion.is_finite() or prompt < 0 or completion < 0:
+        return None
+    return (
+        prompt * input_tokens
+        + completion * output_tokens
+    )
 
 
 def _stream_events(output: str) -> list[dict[str, Any]]:

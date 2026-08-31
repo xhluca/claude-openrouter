@@ -107,7 +107,7 @@ PY
 clor search glm-5.3 --tools > /tmp/tool-search.txt
 grep -q '^z-ai/glm-5.3-flash' /tmp/tool-search.txt
 echo OPENROUTER_TOOL_SEARCH_OK
-if ! clor check z-ai/glm-5.3-flash > /tmp/tool-check.txt 2>/tmp/tool-check.error; then
+if ! clor check z-ai/glm-5.3-flash --yes > /tmp/tool-check.txt 2>/tmp/tool-check.error; then
   sed -n '1,160p' /tmp/tool-check.txt >&2
   sed -n '1,160p' /tmp/tool-check.error >&2
   exit 1

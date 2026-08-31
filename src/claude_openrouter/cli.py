@@ -20,7 +20,14 @@ from .anthropic import (
     validate_anthropic_key_shape,
     write_anthropic_credential,
 )
-from .check import probe_model
+from .check import (
+    PROBE_INPUT_TOKEN_ESTIMATE,
+    PROBE_INPUT_TOKEN_PLANNING_MAX,
+    PROBE_OUTPUT_TOKEN_ESTIMATE,
+    PROBE_OUTPUT_TOKEN_PLANNING_MAX,
+    estimate_probe_cost,
+    probe_model,
+)
 from .launcher import has_native_login, launch_claude
 from .models import (
     exact_models,
@@ -50,6 +57,7 @@ from .settings import (
     load_preferences,
     refresh_claude_credential,
     reset_integration,
+    set_check_confirmation,
 )
 from .storage import read_json_object
 from .uninstall import remove_installed_package
@@ -102,6 +110,12 @@ def parser() -> argparse.ArgumentParser:
         help="run a billable Claude Code tool round-trip for one model",
     )
     check.add_argument("model", help="exact OpenRouter model ID (need not be a favorite)")
+    check.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="run without the interactive billing confirmation",
+    )
 
     setup = commands.add_parser("setup", help="configure the key and Claude Code again")
     setup.add_argument("--key-stdin", action="store_true", help="read the key from stdin")
@@ -131,7 +145,7 @@ def parser() -> argparse.ArgumentParser:
     choice.add_argument("--model", dest="model_option", help="select one exact model ID")
     choice.add_argument("--models", nargs="+", metavar="MODEL", help="select exact model IDs")
 
-    config = commands.add_parser("config", help="change the stored OpenRouter API key")
+    config = commands.add_parser("config", help="change credentials and CLI preferences")
     config.add_argument("--key-stdin", action="store_true", help="read the key from stdin")
     config.add_argument("--no-validate", action="store_true", help="skip the key metadata check")
     config.add_argument(
@@ -143,6 +157,11 @@ def parser() -> argparse.ArgumentParser:
         "--anthropic-key-stdin",
         action="store_true",
         help="read and store an Anthropic API key, then select API billing",
+    )
+    config.add_argument(
+        "--check-confirmation",
+        choices=("ask", "never"),
+        help="ask before billable model checks, or never ask",
     )
 
     doctor = commands.add_parser("doctor", help="check hybrid routing and Claude authentication")
@@ -352,7 +371,51 @@ def command_search(
     return 0 if matches else 1
 
 
-def command_check(requested_model: str) -> int:
+def _formatted_probe_estimate(model: dict[str, Any]) -> str:
+    low = estimate_probe_cost(model)
+    high = estimate_probe_cost(
+        model,
+        input_tokens=PROBE_INPUT_TOKEN_PLANNING_MAX,
+        output_tokens=PROBE_OUTPUT_TOKEN_PLANNING_MAX,
+    )
+    if low is None or high is None:
+        return "Estimated charge: unavailable from this model's catalog pricing."
+    return (
+        f"Estimated charge: about ${low:.3f}–${high:.3f} at current catalog rates "
+        f"({PROBE_INPUT_TOKEN_ESTIMATE // 1000}K–"
+        f"{PROBE_INPUT_TOKEN_PLANNING_MAX // 1000}K input + "
+        f"{PROBE_OUTPUT_TOKEN_ESTIMATE:,}–{PROBE_OUTPUT_TOKEN_PLANNING_MAX:,} output tokens)."
+    )
+
+
+def _confirm_billable_check(model: dict[str, Any], *, assume_yes: bool) -> bool:
+    print(_formatted_probe_estimate(model))
+    print("Actual usage and provider charges may vary.")
+    confirmation_required = load_preferences().get("confirm_billable_checks", True)
+    if assume_yes or confirmation_required is False:
+        return True
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "billable model checks require confirmation in a terminal; rerun with --yes"
+        )
+    while True:
+        answer = input("Continue? [y] Yes / [N] No / [a] Always allow: ").strip().casefold()
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"a", "always"}:
+            set_check_confirmation(False)
+            print(
+                "Future checks will not ask. Restore prompts with "
+                "`clor config --check-confirmation ask`."
+            )
+            return True
+        if answer in {"", "n", "no"}:
+            print("Cancelled; no billable request was sent.")
+            return False
+        print("Enter y, n, or a.", file=sys.stderr)
+
+
+def command_check(requested_model: str, *, assume_yes: bool) -> int:
     model_id = original_model(requested_model) or requested_model
     if not hybrid_openrouter_allowed(model_id):
         raise ValueError(
@@ -362,6 +425,8 @@ def command_check(requested_model: str) -> int:
     model = exact_models(refresh_catalog(), [model_id])[0]
     print(f"Model: {model_id}")
     print(f"Catalog: {tool_capability_badge(model, detailed=True)}")
+    if not _confirm_billable_check(model, assume_yes=assume_yes):
+        return 0
     print("Running an isolated, billable Claude Code Glob round-trip…")
     result = probe_model(model)
     if result.passed:
@@ -513,7 +578,18 @@ def command_config(
     no_validate: bool,
     anthropic_auth: str | None,
     anthropic_key_stdin: bool,
+    check_confirmation: str | None,
 ) -> int:
+    if check_confirmation is not None:
+        if key_stdin or no_validate or anthropic_auth is not None or anthropic_key_stdin:
+            raise ValueError(
+                "configure billing-check confirmation separately from credentials"
+            )
+        required = check_confirmation == "ask"
+        set_check_confirmation(required)
+        state = "required" if required else "disabled"
+        print(f"Billable model-check confirmation is now {state}.")
+        return 0
     if key_stdin and (anthropic_auth is not None or anthropic_key_stdin):
         raise ValueError("configure OpenRouter and Anthropic credentials in separate commands")
     if anthropic_key_stdin and anthropic_auth == "max":
@@ -678,7 +754,7 @@ def main(argv: list[str] | None = None) -> int:
                 as_json=args.json,
             )
         if args.command == "check":
-            return command_check(args.model)
+            return command_check(args.model, assume_yes=args.yes)
         if args.command == "setup":
             return command_setup(
                 key_stdin=args.key_stdin,
@@ -696,6 +772,7 @@ def main(argv: list[str] | None = None) -> int:
                 no_validate=args.no_validate,
                 anthropic_auth=args.anthropic_auth,
                 anthropic_key_stdin=args.anthropic_key_stdin,
+                check_confirmation=args.check_confirmation,
             )
         if args.command == "doctor":
             return command_doctor(as_json=args.json)
