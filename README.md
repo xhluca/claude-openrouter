@@ -255,6 +255,13 @@ thinking blocks, context handling, and Claude Code compatibility. Prefer models
 that advertise tools, and use `clor check MODEL` to verify an actual Claude Code
 tool round-trip rather than assuming that metadata alone guarantees behavior.
 
+For Gemini models, the router normalizes Claude Code/MCP array schemas to the
+stricter Gemini function-schema format and removes incompatible reasoning blocks
+from the returned Anthropic stream. This keeps visible answers and tool calls
+working while the model's reasoning-token usage remains included in OpenRouter
+billing. `google/gemini-3.8-flash` is covered by a live Claude Code tool
+round-trip in the release validation.
+
 ## Reset and uninstall
 
 Stop the router, restore the pre-install Claude settings, and keep the command:

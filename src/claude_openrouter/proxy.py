@@ -45,6 +45,7 @@ HOP_BY_HOP = {
 }
 
 CAPABILITY_ERROR = "unsupported_input_modality"
+GEMINI_MODEL_PREFIX = "google/gemini"
 
 
 def _vision_hint(favorites: set[str], model_modalities: dict[str, frozenset[str]]) -> str:
@@ -141,6 +142,120 @@ def _append_system_notice(payload: dict[str, Any], notice: str) -> None:
         payload["system"] = notice
 
 
+def _repair_itemless_arrays(value: Any) -> int:
+    """Make valid open-ended JSON arrays acceptable to Gemini's stricter schema."""
+    if isinstance(value, list):
+        return sum(_repair_itemless_arrays(item) for item in value)
+    if not isinstance(value, dict):
+        return 0
+    repaired = 0
+    if str(value.get("type", "")).casefold() == "array" and "items" not in value:
+        # JSON Schema permits an omitted ``items`` (unconstrained elements), but
+        # Gemini's function-declaration Schema proto requires an element schema.
+        # String is the least surprising representation for CLI/MCP arguments.
+        value["items"] = {"type": "string"}
+        repaired += 1
+    return repaired + sum(_repair_itemless_arrays(item) for item in value.values())
+
+
+def _repair_gemini_tool_schemas(payload: dict[str, Any]) -> int:
+    tools = payload.get("tools")
+    if not isinstance(tools, list):
+        return 0
+    return _repair_itemless_arrays(tools)
+
+
+def _remove_gemini_adaptive_thinking(payload: dict[str, Any]) -> bool:
+    """Drop Claude thinking controls that can yield empty Gemini turns."""
+    thinking = payload.get("thinking")
+    if not isinstance(thinking, dict) or thinking.get("type") != "adaptive":
+        return False
+    payload.pop("thinking")
+    output_config = payload.get("output_config")
+    if isinstance(output_config, dict) and "effort" in output_config:
+        output_config.pop("effort")
+        if not output_config:
+            payload.pop("output_config")
+    return True
+
+
+def _sse_event_json(event: bytes) -> dict[str, Any] | None:
+    data: list[bytes] = []
+    for line in event.replace(b"\r\n", b"\n").splitlines():
+        if line == b"data":
+            data.append(b"")
+        elif line.startswith(b"data:"):
+            data.append(line[5:].lstrip(b" "))
+    if not data or data == [b"[DONE]"]:
+        return None
+    try:
+        value = json.loads(b"\n".join(data))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _filter_gemini_sse_event(event: bytes, thinking_indexes: set[int]) -> bytes:
+    """Hide Gemini thinking blocks that Claude Code cannot parse reliably."""
+    value = _sse_event_json(event)
+    if value is None:
+        return event
+    index = value.get("index")
+    event_type = value.get("type")
+    content_block = value.get("content_block")
+    delta = value.get("delta")
+    if (
+        event_type == "content_block_start"
+        and isinstance(index, int)
+        and isinstance(content_block, dict)
+        and content_block.get("type") in {"thinking", "redacted_thinking"}
+    ):
+        thinking_indexes.add(index)
+        return b""
+    if isinstance(index, int) and index in thinking_indexes:
+        if event_type == "content_block_stop":
+            thinking_indexes.discard(index)
+        return b""
+    if (
+        event_type == "content_block_delta"
+        and isinstance(index, int)
+        and isinstance(delta, dict)
+        and delta.get("type") in {"thinking_delta", "signature_delta"}
+    ):
+        thinking_indexes.add(index)
+        return b""
+    return event
+
+
+def _next_sse_event(buffer: bytes) -> tuple[bytes, bytes] | None:
+    endings = [
+        (position, separator)
+        for separator in (b"\n\n", b"\r\n\r\n")
+        if (position := buffer.find(separator)) >= 0
+    ]
+    if not endings:
+        return None
+    position, separator = min(endings, key=lambda item: item[0])
+    end = position + len(separator)
+    return buffer[:end], buffer[end:]
+
+
+def _remove_gemini_thinking_content(body: bytes) -> bytes:
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return body
+    if not isinstance(payload, dict) or not isinstance(payload.get("content"), list):
+        return body
+    payload["content"] = [
+        block
+        for block in payload["content"]
+        if not isinstance(block, dict)
+        or block.get("type") not in {"thinking", "redacted_thinking"}
+    ]
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+
+
 def router_base_url(port: int = DEFAULT_PORT) -> str:
     return f"http://{DEFAULT_HOST}:{port}"
 
@@ -190,6 +305,9 @@ def route_payload(
     route, upstream_model = classify_model(payload["model"], favorites)
     if route == "openrouter":
         payload["model"] = upstream_model
+        if upstream_model.casefold().startswith(GEMINI_MODEL_PREFIX):
+            _repair_gemini_tool_schemas(payload)
+            _remove_gemini_adaptive_thinking(payload)
         modalities = (model_modalities or {}).get(upstream_model)
         if modalities is not None and "image" not in modalities:
             vision_hint = _vision_hint(favorites, model_modalities or {})
@@ -256,8 +374,17 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
                 if route == "openrouter"
                 else self.router.anthropic_upstream
             )
-            headers = self._upstream_headers(route, len(body))
-            self._forward(upstream, self.path, headers, body)
+            headers = self._upstream_headers(route, model, len(body))
+            self._forward(
+                upstream,
+                self.path,
+                headers,
+                body,
+                normalize_gemini=(
+                    route == "openrouter"
+                    and model.casefold().startswith(GEMINI_MODEL_PREFIX)
+                ),
+            )
             self._record_status(route, model, None)
         except ValueError as exc:
             self._error_response(400, "invalid_request_error", str(exc))
@@ -266,7 +393,9 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
             self._error_response(502, "api_error", f"routing failed: {exc}")
             self._record_status("error", "unknown", str(exc))
 
-    def _upstream_headers(self, route: str, content_length: int) -> dict[str, str]:
+    def _upstream_headers(
+        self, route: str, model: str, content_length: int
+    ) -> dict[str, str]:
         removed = HOP_BY_HOP | {
             "host",
             "content-length",
@@ -276,7 +405,14 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
             LOCAL_TOKEN_HEADER.casefold(),
         }
         headers = {
-            key: value for key, value in self.headers.items() if key.casefold() not in removed
+            key: value
+            for key, value in self.headers.items()
+            if key.casefold() not in removed
+            and not (
+                route == "openrouter"
+                and model.casefold().startswith(GEMINI_MODEL_PREFIX)
+                and key.casefold() == "anthropic-beta"
+            )
         }
         headers["Content-Length"] = str(content_length)
         headers["Accept-Encoding"] = "identity"
@@ -297,7 +433,13 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
         return headers
 
     def _forward(
-        self, upstream: str, request_path: str, headers: dict[str, str], body: bytes
+        self,
+        upstream: str,
+        request_path: str,
+        headers: dict[str, str],
+        body: bytes,
+        *,
+        normalize_gemini: bool = False,
     ) -> None:
         connection_type, hostname, port, base_path = _target(upstream)
         kwargs: dict[str, Any] = {"timeout": 600}
@@ -308,26 +450,48 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
         try:
             connection.request("POST", path, body=body, headers=headers)
             response = connection.getresponse()
+            content_type = response.getheader("Content-Type", "")
             self.send_response(response.status, response.reason)
             for key, value in response.getheaders():
                 if key.casefold() not in HOP_BY_HOP | {"content-length", "server", "date"}:
                     self.send_header(key, value)
             self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
-            # ``read`` may wait for the full requested size or EOF, which turns
-            # SSE token streams into one buffered completion. ``read1`` makes
-            # at most one underlying read and returns available bytes promptly.
-            while chunk := response.read1(64 * 1024):
-                self.wfile.write(f"{len(chunk):X}\r\n".encode())
-                self.wfile.write(chunk)
-                self.wfile.write(b"\r\n")
-                self.wfile.flush()
+            if normalize_gemini and "text/event-stream" in content_type.casefold():
+                self._forward_gemini_sse(response)
+            elif normalize_gemini:
+                self._write_chunk(_remove_gemini_thinking_content(response.read()))
+            else:
+                # ``read`` may wait for the full requested size or EOF, which turns
+                # SSE token streams into one buffered completion. ``read1`` makes
+                # at most one underlying read and returns available bytes promptly.
+                while chunk := response.read1(64 * 1024):
+                    self._write_chunk(chunk)
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             return
         finally:
             connection.close()
+
+    def _write_chunk(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        self.wfile.write(f"{len(chunk):X}\r\n".encode())
+        self.wfile.write(chunk)
+        self.wfile.write(b"\r\n")
+        self.wfile.flush()
+
+    def _forward_gemini_sse(self, response: http.client.HTTPResponse) -> None:
+        buffer = b""
+        thinking_indexes: set[int] = set()
+        while chunk := response.read1(64 * 1024):
+            buffer += chunk
+            while split := _next_sse_event(buffer):
+                event, buffer = split
+                self._write_chunk(_filter_gemini_sse_event(event, thinking_indexes))
+        if buffer:
+            self._write_chunk(_filter_gemini_sse_event(buffer, thinking_indexes))
 
     def _record_status(self, route: str, model: str, error: str | None) -> None:
         if not self.router.record_status:

@@ -126,7 +126,8 @@ def test_probe_never_consumes_the_calling_shell_input(monkeypatch) -> None:
         def server_close(self) -> None:
             pass
 
-    def run(_command, **kwargs):
+    def run(command, **kwargs):
+        captured["command"] = command
         captured.update(kwargs)
         return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
@@ -137,3 +138,4 @@ def test_probe_never_consumes_the_calling_shell_input(monkeypatch) -> None:
     check.probe_model({"id": "vendor/model"})
 
     assert captured["stdin"] is subprocess.DEVNULL
+    assert captured["command"][captured["command"].index("--name") + 1] == "clor-tool-check"

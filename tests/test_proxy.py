@@ -14,6 +14,9 @@ from claude_openrouter.paths import anthropic_credential_path
 from claude_openrouter.proxy import (
     LOCAL_TOKEN_HEADER,
     HybridRouterServer,
+    _filter_gemini_sse_event,
+    _next_sse_event,
+    _remove_gemini_thinking_content,
     classify_model,
     route_payload,
 )
@@ -24,6 +27,7 @@ ANTHROPIC_KEY = "sk-ant-this-is-a-fake-test-key"
 LOCAL_TOKEN = "local-router-test-token"
 GLM = "z-ai/glm-5.3-flash"
 DEEPSEEK = "~deepseek/deepseek-v4-flash-latest"
+GEMINI = "google/gemini-3.8-flash"
 STREAM_FIRST = b"data: first\n\n"
 STREAM_SECOND = b"data: second\n\n"
 
@@ -85,7 +89,7 @@ def routing_servers(isolated_home):
     router = HybridRouterServer(
         ("127.0.0.1", 0),
         local_token=LOCAL_TOKEN,
-        favorites={GLM},
+        favorites={GLM, GEMINI},
         anthropic_auth="max",
         anthropic_upstream=f"{base}/anthropic",
         openrouter_upstream=f"{base}/openrouter",
@@ -103,7 +107,13 @@ def routing_servers(isolated_home):
         upstream_thread.join(timeout=2)
 
 
-def request(router, model: str, *, authorization: str = "Bearer max-oauth"):
+def request(
+    router,
+    model: str,
+    *,
+    authorization: str = "Bearer max-oauth",
+    extra_headers: dict[str, str] | None = None,
+):
     body = json.dumps({"model": model, "max_tokens": 1, "messages": []}).encode()
     headers = {
         "Content-Type": "application/json",
@@ -111,6 +121,7 @@ def request(router, model: str, *, authorization: str = "Bearer max-oauth"):
         "X-Api-Key": "must-not-leak",
         LOCAL_TOKEN_HEADER: LOCAL_TOKEN,
     }
+    headers.update(extra_headers or {})
     return urllib.request.urlopen(
         urllib.request.Request(
             f"http://127.0.0.1:{router.server_port}/v1/messages",
@@ -133,6 +144,28 @@ def test_openrouter_route_strips_cross_provider_credentials(routing_servers) -> 
     assert "x-api-key" not in headers
     assert LOCAL_TOKEN_HEADER.casefold() not in headers
     assert "max-oauth" not in json.dumps(captured)
+
+
+def test_gemini_route_strips_claude_beta_header(routing_servers) -> None:
+    beta = "claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24"
+    with request(
+        routing_servers,
+        f"clor/openrouter/{GEMINI}",
+        extra_headers={"Anthropic-Beta": beta},
+    ) as response:
+        assert response.status == 200
+    assert "anthropic-beta" not in RecordingUpstream.requests[-1]["headers"]
+
+
+def test_non_gemini_route_preserves_claude_beta_header(routing_servers) -> None:
+    beta = "claude-code-20250219,interleaved-thinking-2025-05-14"
+    with request(
+        routing_servers,
+        f"clor/openrouter/{GLM}",
+        extra_headers={"Anthropic-Beta": beta},
+    ) as response:
+        assert response.status == 200
+    assert RecordingUpstream.requests[-1]["headers"]["anthropic-beta"] == beta
 
 
 def test_openrouter_stream_is_forwarded_before_upstream_finishes(isolated_home) -> None:
@@ -371,3 +404,118 @@ def test_vision_model_keeps_image_payload_unchanged() -> None:
     assert routed["messages"][0]["content"][0]["type"] == "image"
     assert routed["messages"][0]["content"][0]["source"]["data"] == "abc"
     assert "system" not in routed
+
+
+def test_gemini_route_repairs_nested_itemless_tool_arrays() -> None:
+    payload = {
+        "model": f"clor/openrouter/{GEMINI}",
+        "thinking": {"type": "adaptive", "display": "omitted"},
+        "output_config": {"effort": "high"},
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [
+            {
+                "name": "query_records",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "object",
+                            "properties": {
+                                "where": {
+                                    "type": "array",
+                                    "items": {"type": "array"},
+                                }
+                            },
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    route, model, body = route_payload(json.dumps(payload).encode(), {GEMINI})
+    routed = json.loads(body)
+    where = routed["tools"][0]["input_schema"]["properties"]["query"][
+        "properties"
+    ]["where"]
+
+    assert (route, model, routed["model"]) == ("openrouter", GEMINI, GEMINI)
+    assert "thinking" not in routed
+    assert "output_config" not in routed
+    assert where["items"] == {"type": "array", "items": {"type": "string"}}
+
+
+def test_non_gemini_route_keeps_open_ended_tool_schema() -> None:
+    payload = {
+        "model": f"clor/openrouter/{GLM}",
+        "thinking": {"type": "adaptive", "display": "omitted"},
+        "output_config": {"effort": "high"},
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [
+            {
+                "name": "open_array",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"values": {"type": "array"}},
+                },
+            }
+        ],
+    }
+
+    _, _, body = route_payload(json.dumps(payload).encode(), {GLM})
+
+    routed = json.loads(body)
+    assert "items" not in routed["tools"][0]["input_schema"]["properties"]["values"]
+    assert routed["thinking"] == {"type": "adaptive", "display": "omitted"}
+    assert routed["output_config"] == {"effort": "high"}
+
+
+def test_gemini_sse_filter_removes_thinking_block_and_signature() -> None:
+    events = [
+        b'data: {"type":"content_block_start","index":0,'
+        b'"content_block":{"type":"text","text":""}}\n\n',
+        b'data: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"text_delta","text":"hello"}}\n\n',
+        b'data: {"type":"content_block_start","index":1,'
+        b'"content_block":{"type":"thinking","thinking":"","signature":""}}\n\n',
+        b'data: {"type":"content_block_stop","index":0}\n\n',
+        b'data: {"type":"content_block_delta","index":1,'
+        b'"delta":{"type":"signature_delta","signature":"secret"}}\n\n',
+        b'data: {"type":"content_block_stop","index":1}\n\n',
+    ]
+    thinking_indexes: set[int] = set()
+
+    filtered = b"".join(
+        _filter_gemini_sse_event(event, thinking_indexes) for event in events
+    )
+
+    assert b'"text":"hello"' in filtered
+    assert b'"index":0' in filtered
+    assert b'"index":1' not in filtered
+    assert b"thinking" not in filtered
+    assert b"signature" not in filtered
+    assert thinking_indexes == set()
+
+
+def test_sse_splitter_handles_lf_and_crlf_boundaries() -> None:
+    first = b"data: first\n\n"
+    second = b"data: second\r\n\r\n"
+    event, remainder = _next_sse_event(first + second) or (b"", b"")
+    assert event == first
+    assert _next_sse_event(remainder) == (second, b"")
+
+
+def test_gemini_non_streaming_response_drops_thinking_content() -> None:
+    body = json.dumps(
+        {
+            "type": "message",
+            "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "thinking", "thinking": "hidden", "signature": "secret"},
+            ],
+        }
+    ).encode()
+
+    normalized = json.loads(_remove_gemini_thinking_content(body))
+
+    assert normalized["content"] == [{"type": "text", "text": "hello"}]

@@ -172,6 +172,8 @@ def probe_model(model: dict[str, Any], *, timeout: int = 180) -> ToolProbeResult
                 "-p",
                 "--model",
                 namespaced_model(model_id),
+                "--name",
+                "clor-tool-check",
                 "--setting-sources",
                 "project,local",
                 "--tools",
